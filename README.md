@@ -7,8 +7,8 @@ I was frustrated with bloated bluetooth vendor software when all I wanted was a 
 ## Features
 
 - **System Tray Integration**: Runs quietly in the system tray
-- **Battery Monitoring**: Monitors battery levels of connected Bluetooth devices every 30 seconds  
-- **Low Battery Notifications**: Shows balloon notifications when device battery drops to 20% or below
+- **Battery Monitoring**: Monitors battery levels of connected Bluetooth devices at your specified interval  
+- **Low Battery Notifications**: Shows balloon notifications when device battery drops below the specified threshold
 - **Visual Battery Indicator**: Tray icon changes color based on the lowest battery level among all devices
 - **Quick Access Menu**: Right-click tray icon for options to view battery levels, refresh, or exit
 - **Device Information**: View all connected Bluetooth devices and their battery status
