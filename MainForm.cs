@@ -506,7 +506,7 @@ namespace Battify
             Form aboutDialog = new Form
             {
                 Text = "About Battify",
-                Size = new Size(350, 330),
+                Size = new Size(350, 360),
                 StartPosition = FormStartPosition.CenterScreen,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -579,17 +579,32 @@ namespace Battify
                 Font = new Font("Segoe UI", 9F)
             };
 
+            LinkLabel githubLink = new LinkLabel
+            {
+                Text = "https://github.com/sendmebits/battify",
+                Location = new Point(20, 235),
+                Size = new Size(310, 20),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI", 9F)
+            };
+            githubLink.LinkClicked += (s, e) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = githubLink.Text,
+                UseShellExecute = true
+            });
+
             Button okButton = new Button
             {
                 Text = "OK",
                 DialogResult = DialogResult.OK,
-                Location = new Point(125, 245),
+                Location = new Point(125, 270),
                 Size = new Size(100, 30)
             };
 
             aboutDialog.Controls.Add(iconBox);
             aboutDialog.Controls.Add(nameLabel);
             aboutDialog.Controls.Add(versionLabel);
+            aboutDialog.Controls.Add(githubLink);
             aboutDialog.Controls.Add(okButton);
             aboutDialog.AcceptButton = okButton;
 
