@@ -79,11 +79,11 @@ The application uses Windows Runtime APIs to:
 ### Building from Source
 
 Requirements:
-- .NET 8.0 SDK
+- .NET 8.0 SDK (https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
 - Windows 10/11 development environment
 
 ```cmd
-git clone <repository-url>
+git clone https://github.com/sendmebits/battify.git
 cd Battify
 dotnet restore
 dotnet build --configuration Release
