@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
-    <ApplicationIcon>Assets\battify.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\favicon.ico</ApplicationIcon>
     <AssemblyVersion>1.0.0</AssemblyVersion>
     <FileVersion>1.0.0</FileVersion>
     <Version>1.0.0</Version>
@@ -15,7 +15,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="Assets\battify.ico">
+    <!-- Publish the higher-resolution favicon into the output Assets folder -->
+    <Content Include="Assets\favicon.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

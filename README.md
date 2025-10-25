@@ -1,4 +1,4 @@
-# Battify - Bluetooth Battery Monitor
+# Battify - Lightweight Bluetooth Battery Level Monitoring
 
 A simple lightweight Windows system tray application that monitors the battery levels of connected Bluetooth devices.
 
