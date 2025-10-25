@@ -1,7 +1,5 @@
 # <img width="32" height="32" alt="battify_icon_full" src="https://github.com/user-attachments/assets/4194eaa6-91e7-40fd-a732-a64dbfdb9a79" /> Battify - Lightweight Bluetooth Battery Level Monitoring
 
-
-
 A simple lightweight Windows system tray application that monitors the battery levels of connected Bluetooth devices.
 
 I was frustrated with bloated bluetooth vendor software when all I wanted was a simple low battery warning notification so I built **Battify**.
@@ -14,6 +12,22 @@ I was frustrated with bloated bluetooth vendor software when all I wanted was a 
 - **Visual Battery Indicator**: Tray icon changes color based on the lowest battery level among all devices
 - **Quick Access Menu**: Right-click tray icon for options to view battery levels, refresh, or exit
 - **Device Information**: View all connected Bluetooth devices and their battery status
+
+### Customizable settings:
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/89546a04-70a7-4043-a602-c80afcd523f2" alt="settings" width="280" />
+</p>
+
+### At a glance battery level in system tray:
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/4d573ea6-438c-4249-b62a-06d40bde91fc" alt="system_tray" width="280" />
+</p>
+
+### Double click to quickly view all detected devices:
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/7ca18741-50f3-426a-8e16-d618a7ed914b" alt="connected_devices" width="280" />
+</p>
+
 
 ## Requirements
 
