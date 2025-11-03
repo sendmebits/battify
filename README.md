@@ -4,6 +4,10 @@ A simple lightweight Windows system tray application that monitors the battery l
 
 I was frustrated with bloated bluetooth vendor software when all I wanted was a simple low battery warning notification so I built **Battify**.
 
+## Download
+
+Standalone app zip file include with each version in the <a href=https://github.com/sendmebits/battify/releases>releases</a> page. Download and unzip to the folder of your choice and it will run from there. 
+
 ## Features
 
 - **System Tray Integration**: Runs quietly in the system tray
