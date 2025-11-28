@@ -19,7 +19,7 @@ Standalone app zip file include with each version in the <a href=https://github.
 
 ### Customizable settings:
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/89546a04-70a7-4043-a602-c80afcd523f2" alt="settings" width="280" />
+  <img src="https://github.com/user-attachments/assets/ed8df238-f410-4048-b106-3a07f208e2ea" alt="settings" width="280" />
 </p>
 
 ### At a glance battery level in system tray:
@@ -27,9 +27,9 @@ Standalone app zip file include with each version in the <a href=https://github.
   <img src="https://github.com/user-attachments/assets/4d573ea6-438c-4249-b62a-06d40bde91fc" alt="system_tray" width="280" />
 </p>
 
-### Double click to quickly view all detected devices:
+### Double click to quickly view all devices:
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/7ca18741-50f3-426a-8e16-d618a7ed914b" alt="connected_devices" width="280" />
+  <img src="https://github.com/user-attachments/assets/3b1fcb6e-c427-4c2e-ae4a-06e770df8559" alt="connected_devices" width="280" />
 </p>
 
 
@@ -88,27 +88,10 @@ Requirements:
 
 ```cmd
 git clone https://github.com/sendmebits/battify.git
-cd Battify
-dotnet restore
-dotnet build --configuration Release
+cd battify
+build-standalone.bat
+Battify-Standalone\Battify.exe
 ```
-
-## Quick Start
-
-1. Build the project:
-   ```cmd
-   build.bat
-   ```
-   Or manually:
-   ```cmd
-   dotnet build --configuration Release
-   ```
-
-2. Run the application:
-   ```cmd
-   cd bin\Release\net8.0-windows10.0.17763.0
-   Battify.exe
-   ```
 
 ## Troubleshooting
 
