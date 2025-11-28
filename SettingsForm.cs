@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using Windows.Devices.Bluetooth;
@@ -13,10 +14,11 @@ namespace Battify
         private Settings settings;
         private MainForm mainForm;
 
-        private CheckedListBox? deviceListBox;
+        private FlowLayoutPanel? devicesListPanel;
         private NumericUpDown? thresholdNumeric;
         private NumericUpDown? intervalNumeric;
-        private NumericUpDown? checkIntervalNumeric;
+        private NumericUpDown? checkIntervalNumeric; // Maps to BatteryUpdateIntervalMinutes (Slow loop)
+        private NumericUpDown? deviceScanIntervalNumeric; // Maps to DeviceScanIntervalSeconds (Fast loop)
         private CheckBox? loggingCheckBox;
         private CheckBox? startWithWindowsCheckBox;
         private Button? viewLogButton;
@@ -38,6 +40,7 @@ namespace Battify
             this.FormClosed += (s, e) => mainForm.DevicesRefreshed -= OnDevicesRefreshed;
             
             InitializeComponent();
+            SetIcon();
             LoadSettings();
         }
 
@@ -81,264 +84,377 @@ namespace Battify
             }
         }
 
+        private void SetIcon()
+        {
+            try
+            {
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "battify_icon_full.png");
+                if (File.Exists(iconPath))
+                {
+                    this.Icon = IconFromPng(iconPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to load icon: {ex.Message}");
+            }
+        }
+
+        private Icon IconFromPng(string path)
+        {
+            using (var stream = new MemoryStream())
+            {
+                using (var bitmap = new Bitmap(path))
+                {
+                    // Write Icon Header
+                    stream.Write(BitConverter.GetBytes((short)0), 0, 2); // Reserved
+                    stream.Write(BitConverter.GetBytes((short)1), 0, 2); // Type (1=Icon)
+                    stream.Write(BitConverter.GetBytes((short)1), 0, 2); // Count
+
+                    // Write Icon Directory Entry
+                    var width = bitmap.Width >= 256 ? 0 : bitmap.Width;
+                    var height = bitmap.Height >= 256 ? 0 : bitmap.Height;
+                    stream.WriteByte((byte)width);
+                    stream.WriteByte((byte)height);
+                    stream.WriteByte(0); // ColorCount
+                    stream.WriteByte(0); // Reserved
+                    stream.Write(BitConverter.GetBytes((short)1), 0, 2); // Planes
+                    stream.Write(BitConverter.GetBytes((short)32), 0, 2); // BitCount
+                    
+                    // Write Image Data
+                    using (var memoryStream = new MemoryStream())
+                    {
+                        bitmap.Save(memoryStream, System.Drawing.Imaging.ImageFormat.Png);
+                        var iconImageBytes = memoryStream.ToArray();
+                        
+                        stream.Write(BitConverter.GetBytes(iconImageBytes.Length), 0, 4); // SizeInBytes
+                        stream.Write(BitConverter.GetBytes(22), 0, 4); // ImageOffset (6 + 16)
+                        
+                        stream.Write(iconImageBytes, 0, iconImageBytes.Length);
+                    }
+                    
+                    stream.Seek(0, SeekOrigin.Begin);
+                    return new Icon(stream);
+                }
+            }
+        }
+
         private void InitializeComponent()
         {
+            ModernTheme.ApplyTheme(this);
             this.Text = "Battify Settings";
-            this.Size = new Size(350, 520);
+            this.Size = new Size(450, 700);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
 
-            // Main panel
-            var mainPanel = new Panel
+            // Main container with scrolling
+            var mainContainer = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(15)
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoScroll = true,
+                Padding = new Padding(20),
+                BackColor = ModernTheme.BackgroundColor
             };
-
-            int yPos = 10;
 
             // Title
             var titleLabel = new Label
             {
-                Text = "Battery Monitoring Settings",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                Location = new Point(10, yPos),
-                AutoSize = true
+                Text = "Settings",
+                Font = ModernTheme.HeaderFont,
+                ForeColor = ModernTheme.TextColor,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 20)
             };
-            mainPanel.Controls.Add(titleLabel);
-            yPos += 35;
+            mainContainer.Controls.Add(titleLabel);
 
-            // Device selection section
-            var deviceSectionLabel = new Label
+            // --- Devices Card ---
+            var devicesCard = new ModernTheme.CardPanel { Width = 390, Height = 180 };
+            
+            var devicesHeader = new Label
             {
-                Text = "Select Devices to Monitor:",
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, yPos),
-                AutoSize = true
+                Text = "Monitored Devices",
+                Font = ModernTheme.SubHeaderFont,
+                ForeColor = ModernTheme.TextColor,
+                AutoSize = true,
+                Location = new Point(15, 15)
             };
-            mainPanel.Controls.Add(deviceSectionLabel);
-            yPos += 25;
+            devicesCard.Controls.Add(devicesHeader);
 
-            // Device list with checkboxes
-            deviceListBox = new CheckedListBox
+            devicesListPanel = new FlowLayoutPanel
             {
-                Location = new Point(10, yPos),
-                Size = new Size(310, 120),
-                CheckOnClick = true,
-                DrawMode = DrawMode.OwnerDrawFixed
+                Location = new Point(15, 45),
+                Size = new Size(360, 80),
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoScroll = true,
+                BackColor = ModernTheme.SurfaceColor
             };
-            deviceListBox.DrawItem += DeviceListBox_DrawItem;
-            deviceListBox.ItemCheck += (s, e) => 
-            {
-                var item = deviceListBox.Items[e.Index] as DeviceItem;
-                if (item != null && string.IsNullOrEmpty(item.DeviceId))
-                {
-                    // Cancel the check if this is the "No devices found" message
-                    e.NewValue = CheckState.Unchecked;
-                }
-            };
-            mainPanel.Controls.Add(deviceListBox);
-            yPos += 125;
+            devicesCard.Controls.Add(devicesListPanel);
 
-            // Refresh button
-            refreshButton = new Button
+            refreshButton = new ModernTheme.ModernButton
             {
-                Text = "Refresh Devices",
-                Location = new Point(10, yPos),
-                Size = new Size(120, 25)
+                Text = "Refresh List",
+                Location = new Point(15, 135),
+                Size = new Size(100, 30)
             };
             refreshButton.Click += RefreshButton_Click;
-            mainPanel.Controls.Add(refreshButton);
-            
-            // Status label (inline with refresh button)
+            devicesCard.Controls.Add(refreshButton);
+
             statusLabel = new Label
             {
                 Text = "",
-                Location = new Point(135, yPos + 4),
-                Size = new Size(185, 20),
+                Location = new Point(125, 140),
+                Size = new Size(250, 20),
                 ForeColor = Color.Green,
-                Font = new Font("Segoe UI", 9, FontStyle.Italic),
+                Font = new Font(ModernTheme.BodyFont, FontStyle.Italic),
                 Visible = false
             };
-            mainPanel.Controls.Add(statusLabel);
-            yPos += 35;
+            devicesCard.Controls.Add(statusLabel);
 
-            // Battery threshold section
+            mainContainer.Controls.Add(devicesCard);
+
+            // --- Notifications Card ---
+            var notifyCard = new ModernTheme.CardPanel { Width = 390, Height = 210 };
+            
+            var notifyHeader = new Label
+            {
+                Text = "Configuration",
+                Font = ModernTheme.SubHeaderFont,
+                ForeColor = ModernTheme.TextColor,
+                AutoSize = true,
+                Location = new Point(15, 15)
+            };
+            notifyCard.Controls.Add(notifyHeader);
+
+            // Threshold
             var thresholdLabel = new Label
             {
-                Text = "Low Battery Threshold (%):",
-                Location = new Point(10, yPos),
-                AutoSize = true
+                Text = "Low Battery Threshold:",
+                Location = new Point(15, 50),
+                AutoSize = true,
+                Font = ModernTheme.BodyFont
             };
-            mainPanel.Controls.Add(thresholdLabel);
+            notifyCard.Controls.Add(thresholdLabel);
 
             thresholdNumeric = new NumericUpDown
             {
-                Location = new Point(220, yPos - 3),
-                Size = new Size(70, 23),
+                Location = new Point(210, 48),
+                Size = new Size(70, 25),
                 Minimum = 1,
                 Maximum = 100,
-                Value = 20
+                Value = 25,
+                BorderStyle = BorderStyle.FixedSingle
             };
-            mainPanel.Controls.Add(thresholdNumeric);
+            notifyCard.Controls.Add(thresholdNumeric);
+            
+            var thresholdUnit = new Label { Text = "%", Location = new Point(285, 50), AutoSize = true };
+            notifyCard.Controls.Add(thresholdUnit);
 
-            var thresholdHelpButton = new Button
+            var thresholdHelp = new ModernTheme.ModernButton
             {
                 Text = "?",
-                Location = new Point(295, yPos - 3),
-                Size = new Size(23, 23),
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                FlatStyle = FlatStyle.System
+                Location = new Point(350, 48),
+                Size = new Size(25, 25)
             };
-            thresholdHelpButton.Click += (s, e) => 
-            {
-                MessageBox.Show(
-                    "This setting determines when you'll receive low battery notifications.\n\n" +
-                    "When a device's battery level drops below this percentage, " +
-                    "Battify will show a notification to alert you.",
-                    "Low Battery Threshold",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.None);
-            };
-            mainPanel.Controls.Add(thresholdHelpButton);
-            yPos += 35;
+            thresholdHelp.Click += (s, e) => MessageBox.Show(
+                "This setting determines when you'll receive low battery notifications.\n\n" +
+                "When a device's battery level drops below this percentage, " +
+                "Battify will show a notification to alert you.",
+                "Low Battery Threshold", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            notifyCard.Controls.Add(thresholdHelp);
 
-            // Notification interval section
+            // Interval
             var intervalLabel = new Label
             {
-                Text = "Notification Repeat Interval (min):",
-                Location = new Point(10, yPos),
-                AutoSize = true
+                Text = "Remind every:",
+                Location = new Point(15, 90),
+                AutoSize = true,
+                Font = ModernTheme.BodyFont
             };
-            mainPanel.Controls.Add(intervalLabel);
+            notifyCard.Controls.Add(intervalLabel);
 
             intervalNumeric = new NumericUpDown
             {
-                Location = new Point(220, yPos - 3),
-                Size = new Size(70, 23),
+                Location = new Point(210, 88),
+                Size = new Size(70, 25),
                 Minimum = 1,
                 Maximum = 1440,
-                Value = 30
+                Value = 60,
+                BorderStyle = BorderStyle.FixedSingle
             };
-            mainPanel.Controls.Add(intervalNumeric);
+            notifyCard.Controls.Add(intervalNumeric);
 
-            var intervalHelpButton = new Button
+            var intervalUnit = new Label { Text = "minutes", Location = new Point(285, 90), AutoSize = true };
+            notifyCard.Controls.Add(intervalUnit);
+
+            var intervalHelp = new ModernTheme.ModernButton
             {
                 Text = "?",
-                Location = new Point(295, yPos - 3),
-                Size = new Size(23, 23),
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                FlatStyle = FlatStyle.System
+                Location = new Point(350, 88),
+                Size = new Size(25, 25)
             };
-            intervalHelpButton.Click += (s, e) => 
-            {
-                MessageBox.Show(
-                    "This controls how often you'll be reminded about low battery devices.\n\n" +
-                    "If a device remains below the battery threshold, Battify will show " +
-                    "another notification after this many minutes have passed since the last notification.",
-                    "Notification Repeat Interval",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.None);
-            };
-            mainPanel.Controls.Add(intervalHelpButton);
-            yPos += 35;
+            intervalHelp.Click += (s, e) => MessageBox.Show(
+                "This controls how often you'll be reminded about low battery devices.\n\n" +
+                "If a device remains below the battery threshold, Battify will show " +
+                "another notification after this many minutes have passed since the last notification.",
+                "Notification Repeat Interval", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            notifyCard.Controls.Add(intervalHelp);
 
-            // Check interval section
+            // Device Scan Interval (Fast Loop)
+            var scanLabel = new Label
+            {
+                Text = "Scan devices every:",
+                Location = new Point(15, 130),
+                AutoSize = true,
+                Font = ModernTheme.BodyFont
+            };
+            notifyCard.Controls.Add(scanLabel);
+
+            deviceScanIntervalNumeric = new NumericUpDown
+            {
+                Location = new Point(210, 128),
+                Size = new Size(70, 25),
+                Minimum = 10,
+                Maximum = 300,
+                Value = 60,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            notifyCard.Controls.Add(deviceScanIntervalNumeric);
+
+            var scanUnit = new Label { Text = "seconds", Location = new Point(285, 130), AutoSize = true };
+            notifyCard.Controls.Add(scanUnit);
+
+            var scanHelp = new ModernTheme.ModernButton
+            {
+                Text = "?",
+                Location = new Point(350, 128),
+                Size = new Size(25, 25)
+            };
+            scanHelp.Click += (s, e) => MessageBox.Show(
+                "This controls how often Battify checks for connected devices and reads their CACHED battery levels.\n\n" +
+                "This is a 'cheap' operation and can be done frequently (e.g., every 60 seconds) without draining device battery.",
+                "Device Scan Interval", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            notifyCard.Controls.Add(scanHelp);
+
+            // Force Update Interval (Slow Loop)
             var checkLabel = new Label
             {
-                Text = "Battery Check Interval (min):",
-                Location = new Point(10, yPos),
-                AutoSize = true
+                Text = "Force update every:",
+                Location = new Point(15, 170),
+                AutoSize = true,
+                Font = ModernTheme.BodyFont
             };
-            mainPanel.Controls.Add(checkLabel);
+            notifyCard.Controls.Add(checkLabel);
 
             checkIntervalNumeric = new NumericUpDown
             {
-                Location = new Point(220, yPos - 3),
-                Size = new Size(70, 23),
+                Location = new Point(210, 168),
+                Size = new Size(70, 25),
                 Minimum = 1,
-                Maximum = 60,
-                Value = 1
+                Maximum = 1440,
+                Value = 90,
+                BorderStyle = BorderStyle.FixedSingle
             };
-            mainPanel.Controls.Add(checkIntervalNumeric);
+            notifyCard.Controls.Add(checkIntervalNumeric);
 
-            var checkHelpButton = new Button
+            var checkUnit = new Label { Text = "minutes", Location = new Point(285, 170), AutoSize = true };
+            notifyCard.Controls.Add(checkUnit);
+
+            var checkHelp = new ModernTheme.ModernButton
             {
                 Text = "?",
-                Location = new Point(295, yPos - 3),
-                Size = new Size(23, 23),
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                FlatStyle = FlatStyle.System
+                Location = new Point(350, 168),
+                Size = new Size(25, 25)
             };
-            checkHelpButton.Click += (s, e) => 
-            {
-                MessageBox.Show(
-                    "This determines how frequently Battify checks the battery levels of your devices.\n\n" +
-                    "More frequent checks (lower values) provide more up-to-date information but " +
-                    "may use slightly more system resources.",
-                    "Battery Check Interval",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.None);
-            };
-            mainPanel.Controls.Add(checkHelpButton);
-            yPos += 45;
+            checkHelp.Click += (s, e) => MessageBox.Show(
+                "This controls how often Battify forces a fresh battery reading from the device.\n\n" +
+                "WARNING: This wakes up the device radio and consumes battery power. Keep this interval long (e.g., 30+ minutes) to preserve battery life.",
+                "Force Update Interval", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            notifyCard.Controls.Add(checkHelp);
 
-            // Start with Windows section
+            mainContainer.Controls.Add(notifyCard);
+
+            // --- System Card ---
+            var systemCard = new ModernTheme.CardPanel { Width = 390, Height = 120 };
+            
+            var systemHeader = new Label
+            {
+                Text = "System",
+                Font = ModernTheme.SubHeaderFont,
+                ForeColor = ModernTheme.TextColor,
+                AutoSize = true,
+                Location = new Point(15, 15)
+            };
+            systemCard.Controls.Add(systemHeader);
+
             startWithWindowsCheckBox = new CheckBox
             {
                 Text = "Start automatically with Windows",
-                Location = new Point(10, yPos),
-                AutoSize = true
+                Location = new Point(15, 45),
+                AutoSize = true,
+                Font = ModernTheme.BodyFont,
+                FlatStyle = FlatStyle.Flat
             };
-            mainPanel.Controls.Add(startWithWindowsCheckBox);
-            yPos += 30;
+            systemCard.Controls.Add(startWithWindowsCheckBox);
 
-            // Logging section
             loggingCheckBox = new CheckBox
             {
                 Text = "Enable Debug Logging",
-                Location = new Point(10, yPos),
-                AutoSize = true
+                Location = new Point(15, 75),
+                AutoSize = true,
+                Font = ModernTheme.BodyFont,
+                FlatStyle = FlatStyle.Flat
             };
             loggingCheckBox.CheckedChanged += LoggingCheckBox_CheckedChanged;
-            mainPanel.Controls.Add(loggingCheckBox);
-            yPos += 30;
+            systemCard.Controls.Add(loggingCheckBox);
 
-            // View Log button
-            viewLogButton = new Button
+            viewLogButton = new ModernTheme.ModernButton
             {
-                Text = "View Debug Log",
-                Location = new Point(10, yPos),
-                Size = new Size(120, 25),
+                Text = "View Log",
+                Location = new Point(250, 70),
+                Size = new Size(80, 25),
                 Visible = false
             };
             viewLogButton.Click += ViewLogButton_Click;
-            mainPanel.Controls.Add(viewLogButton);
-            yPos += 35;
+            systemCard.Controls.Add(viewLogButton);
 
-            // Buttons
-            saveButton = new Button
+            mainContainer.Controls.Add(systemCard);
+
+            // --- Action Buttons ---
+            var actionPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 60,
+                BackColor = ModernTheme.BackgroundColor,
+                Padding = new Padding(0, 10, 20, 10)
+            };
+
+            saveButton = new ModernTheme.PrimaryButton
             {
                 Text = "Save",
-                Location = new Point(150, yPos),
-                Size = new Size(80, 30),
+                Location = new Point(230, 15),
+                Size = new Size(90, 32),
                 DialogResult = DialogResult.OK
             };
             saveButton.Click += SaveButton_Click;
-            mainPanel.Controls.Add(saveButton);
+            actionPanel.Controls.Add(saveButton);
 
-            cancelButton = new Button
+            cancelButton = new ModernTheme.ModernButton
             {
                 Text = "Cancel",
-                Location = new Point(240, yPos),
-                Size = new Size(80, 30),
+                Location = new Point(330, 15),
+                Size = new Size(90, 32),
                 DialogResult = DialogResult.Cancel
             };
-            mainPanel.Controls.Add(cancelButton);
+            actionPanel.Controls.Add(cancelButton);
 
-            this.Controls.Add(mainPanel);
+            this.Controls.Add(mainContainer);
+            this.Controls.Add(actionPanel);
+            
             this.AcceptButton = saveButton;
             this.CancelButton = cancelButton;
         }
@@ -354,7 +470,9 @@ namespace Battify
             if (intervalNumeric != null)
                 intervalNumeric.Value = settings.NotificationIntervalMinutes;
             if (checkIntervalNumeric != null)
-                checkIntervalNumeric.Value = settings.CheckIntervalMinutes;
+                checkIntervalNumeric.Value = settings.BatteryUpdateIntervalMinutes;
+            if (deviceScanIntervalNumeric != null)
+                deviceScanIntervalNumeric.Value = settings.DeviceScanIntervalSeconds;
 
             // Load logging settings
             if (loggingCheckBox != null)
@@ -379,33 +497,63 @@ namespace Battify
 
         private void RefreshDeviceList()
         {
-            if (deviceListBox == null) return;
+            if (devicesListPanel == null) return;
             
             // Get current device data from MainForm
             var availableDevices = mainForm.ConnectedDevices;
             var currentBatteryLevels = mainForm.LastKnownBatteryLevels;
             
-            // Save currently checked device IDs before clearing
-            var checkedDeviceIds = new HashSet<string>();
-            foreach (var item in deviceListBox.CheckedItems)
+            // Capture currently monitored devices from settings and current UI state
+            var monitoredDeviceIds = new HashSet<string>(settings.MonitoredDevices);
+            
+            foreach (Control control in devicesListPanel.Controls)
             {
-                var deviceItem = item as DeviceItem;
-                if (deviceItem != null)
+                if (control is Panel row && row.Tag is string deviceId)
                 {
-                    checkedDeviceIds.Add(deviceItem.DeviceId);
+                    var toggle = row.Controls.OfType<ModernTheme.ToggleSwitch>().FirstOrDefault();
+                    if (toggle != null)
+                    {
+                        if (toggle.IsOn) monitoredDeviceIds.Add(deviceId);
+                        else monitoredDeviceIds.Remove(deviceId);
+                    }
                 }
             }
             
-            // Also include devices from settings (for initial load)
-            foreach (var deviceId in settings.MonitoredDevices)
-            {
-                checkedDeviceIds.Add(deviceId);
-            }
+            devicesListPanel.Controls.Clear();
+            devicesListPanel.SuspendLayout();
             
-            deviceListBox.Items.Clear();
-            
-            // Create a dictionary to track which devices have been added
             var addedDeviceIds = new HashSet<string>();
+            
+            // Helper to add a row
+            void AddDeviceRow(string deviceId, string displayName, bool isConnected, bool isMonitored)
+            {
+                var row = new Panel
+                {
+                    Width = devicesListPanel.Width - 25, // Account for scrollbar
+                    Height = 30,
+                    Tag = deviceId,
+                    Margin = new Padding(0, 0, 0, 5)
+                };
+
+                var label = new Label
+                {
+                    Text = displayName,
+                    AutoSize = true,
+                    Location = new Point(0, 5),
+                    ForeColor = isConnected ? ModernTheme.TextColor : ModernTheme.SecondaryTextColor
+                };
+                
+                var toggle = new ModernTheme.ToggleSwitch
+                {
+                    IsOn = isMonitored,
+                    Location = new Point(row.Width - 45, 5),
+                    Anchor = AnchorStyles.Top | AnchorStyles.Right
+                };
+
+                row.Controls.Add(label);
+                row.Controls.Add(toggle);
+                devicesListPanel.Controls.Add(row);
+            }
             
             // First, add all currently connected devices
             if (availableDevices.Count > 0)
@@ -418,8 +566,9 @@ namespace Battify
                 foreach (var device in sortedDevices)
                 {
                     string deviceName = device.Name ?? "Unknown Device";
-                    string batteryInfo = currentBatteryLevels.ContainsKey(deviceName)
-                        ? $" [{currentBatteryLevels[deviceName]}%]"
+                    // Use DeviceId for lookup
+                    string batteryInfo = currentBatteryLevels.ContainsKey(device.DeviceId)
+                        ? $" [{currentBatteryLevels[device.DeviceId]}%]"
                         : " [Battery unknown]";
 
                     // Update the device name in settings for persistence
@@ -428,56 +577,60 @@ namespace Battify
                         settings.DeviceNames[device.DeviceId] = device.Name;
                     }
 
-                    int index = deviceListBox.Items.Add(new DeviceItem
-                    {
-                        DeviceId = device.DeviceId,
-                        DisplayName = $"{deviceName}{batteryInfo}",
-                        IsConnected = true
-                    });
+                    bool isMonitored = monitoredDeviceIds.Contains(device.DeviceId);
                     
+                    AddDeviceRow(device.DeviceId, $"{deviceName}{batteryInfo}", true, isMonitored);
                     addedDeviceIds.Add(device.DeviceId);
-                    
-                    // Restore checked state if this device was previously checked
-                    if (checkedDeviceIds.Contains(device.DeviceId))
-                    {
-                        deviceListBox.SetItemChecked(index, true);
-                    }
                 }
             }
             
-            // Now add any monitored devices that are not currently connected (greyed out)
-            foreach (var deviceId in checkedDeviceIds)
+            // Combine monitored devices with all known devices (from history)
+            var allKnownDevices = new HashSet<string>(monitoredDeviceIds);
+            foreach (var id in settings.DeviceNames.Keys) allKnownDevices.Add(id);
+            foreach (var id in settings.LastKnownBatteryLevels.Keys) allKnownDevices.Add(id);
+
+            // Now add any known devices that are not currently connected (greyed out)
+            foreach (var deviceId in allKnownDevices)
             {
                 if (!addedDeviceIds.Contains(deviceId))
                 {
-                    // This is a monitored device that's currently disconnected
+                    // This is a known device that's currently disconnected
                     // Use the persisted name if available, otherwise try to extract from ID
                     string deviceName = settings.DeviceNames.ContainsKey(deviceId)
                         ? settings.DeviceNames[deviceId]
                         : ExtractDeviceNameFromId(deviceId);
                     
-                    int index = deviceListBox.Items.Add(new DeviceItem
+                    // Check for last known battery level
+                    string batteryInfo = "";
+                    if (settings.LastKnownBatteryLevels.ContainsKey(deviceId))
                     {
-                        DeviceId = deviceId,
-                        DisplayName = $"{deviceName} [Disconnected]",
-                        IsConnected = false
-                    });
+                        batteryInfo = $" [{settings.LastKnownBatteryLevels[deviceId]}%]";
+                    }
+                    else if (currentBatteryLevels.ContainsKey(deviceId))
+                    {
+                        batteryInfo = $" [{currentBatteryLevels[deviceId]}%]";
+                    }
                     
-                    // Keep it checked since it's in the monitored list
-                    deviceListBox.SetItemChecked(index, true);
+                    bool isMonitored = monitoredDeviceIds.Contains(deviceId);
+                    AddDeviceRow(deviceId, $"{deviceName}{batteryInfo} [Disconnected]", false, isMonitored);
                 }
             }
             
             // Show a message if there are no devices at all
-            if (deviceListBox.Items.Count == 0)
+            if (devicesListPanel.Controls.Count == 0)
             {
-                deviceListBox.Items.Add(new DeviceItem
+                var label = new Label
                 {
-                    DeviceId = "",
-                    DisplayName = "No Bluetooth devices found",
-                    IsConnected = false
-                });
+                    Text = "No Bluetooth devices found",
+                    AutoSize = false,
+                    Width = devicesListPanel.Width - 10,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    ForeColor = ModernTheme.SecondaryTextColor
+                };
+                devicesListPanel.Controls.Add(label);
             }
+            
+            devicesListPanel.ResumeLayout();
         }
         
         private string ExtractDeviceNameFromId(string deviceId)
@@ -514,65 +667,6 @@ namespace Battify
             return "Unknown Device";
         }
         
-        private void DeviceListBox_DrawItem(object? sender, DrawItemEventArgs e)
-        {
-            if (e.Index < 0 || deviceListBox == null) return;
-            
-            var item = deviceListBox.Items[e.Index] as DeviceItem;
-            if (item == null) return;
-            
-            // Draw the background
-            e.DrawBackground();
-            
-            // Determine text color based on connection status and if it's the "No devices" message
-            Color textColor;
-            if (string.IsNullOrEmpty(item.DeviceId)) // This is the "No devices found" message
-            {
-                textColor = Color.Gray;
-                // Draw text without checkbox offset since we won't show a checkbox
-                using (SolidBrush brush = new SolidBrush(textColor))
-                {
-                    Rectangle textRect = e.Bounds;
-                    StringFormat format = new StringFormat
-                    {
-                        Alignment = StringAlignment.Center,
-                        LineAlignment = StringAlignment.Center
-                    };
-                    
-                    e.Graphics.DrawString(
-                        item.DisplayName,
-                        e.Font ?? SystemFonts.DefaultFont,
-                        brush,
-                        textRect,
-                        format);
-                }
-            }
-            else
-            {
-                textColor = item.IsConnected ? e.ForeColor : Color.Gray;
-                // Draw the checkbox (handled by the control itself) and text
-                using (SolidBrush brush = new SolidBrush(textColor))
-                {
-                    // Offset for the checkbox
-                    Rectangle textRect = new Rectangle(
-                        e.Bounds.X + 18, 
-                        e.Bounds.Y, 
-                        e.Bounds.Width - 18, 
-                        e.Bounds.Height);
-                    
-                    e.Graphics.DrawString(
-                        item.DisplayName,
-                        e.Font ?? SystemFonts.DefaultFont,
-                        brush,
-                        textRect,
-                        StringFormat.GenericDefault);
-                }
-            }
-            
-            // Draw focus rectangle if needed
-            e.DrawFocusRectangle();
-        }
-
         private void RefreshButton_Click(object? sender, EventArgs e)
         {
             ShowStatusMessage("Refreshing devices...", Color.Blue);
@@ -597,7 +691,9 @@ namespace Battify
             if (intervalNumeric != null)
                 settings.NotificationIntervalMinutes = (int)intervalNumeric.Value;
             if (checkIntervalNumeric != null)
-                settings.CheckIntervalMinutes = (int)checkIntervalNumeric.Value;
+                settings.BatteryUpdateIntervalMinutes = (int)checkIntervalNumeric.Value;
+            if (deviceScanIntervalNumeric != null)
+                settings.DeviceScanIntervalSeconds = (int)deviceScanIntervalNumeric.Value;
 
             // Save logging settings
             if (loggingCheckBox != null)
@@ -632,15 +728,18 @@ namespace Battify
             settings.MonitoredDevices.Clear();
             var newMonitoredDeviceIds = new HashSet<string>();
             
-            if (deviceListBox != null)
+            if (devicesListPanel != null)
             {
-                foreach (var item in deviceListBox.CheckedItems)
+                foreach (Control control in devicesListPanel.Controls)
                 {
-                    var deviceItem = item as DeviceItem;
-                    if (deviceItem != null)
+                    if (control is Panel row && row.Tag is string deviceId)
                     {
-                        settings.MonitoredDevices.Add(deviceItem.DeviceId);
-                        newMonitoredDeviceIds.Add(deviceItem.DeviceId);
+                        var toggle = row.Controls.OfType<ModernTheme.ToggleSwitch>().FirstOrDefault();
+                        if (toggle != null && toggle.IsOn)
+                        {
+                            settings.MonitoredDevices.Add(deviceId);
+                            newMonitoredDeviceIds.Add(deviceId);
+                        }
                     }
                 }
             }
@@ -775,15 +874,6 @@ namespace Battify
             {
                 return false;
             }
-        }
-
-        private class DeviceItem
-        {
-            public string DeviceId { get; set; } = "";
-            public string DisplayName { get; set; } = "";
-            public bool IsConnected { get; set; } = true;
-
-            public override string ToString() => DisplayName;
         }
     }
 }

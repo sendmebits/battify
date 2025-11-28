@@ -8,7 +8,10 @@
 ## Get latest from https://github.com/github/gitignore/blob/main/Dotnet.gitignore
 
 # Battify
-Battify-Standalone/
+Build/
+
+# Tools
+.kiro
 
 # Build results
 [Dd]ebug/

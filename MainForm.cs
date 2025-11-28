@@ -20,6 +20,7 @@ namespace Battify
         private Dictionary<string, BluetoothLEDevice> connectedDevices;
         private Dictionary<string, int> lastKnownBatteryLevels;
         private Dictionary<string, DateTime> lastNotificationTime;
+        private Dictionary<string, DateTime> lastForcedUpdate; // Track last expensive GATT read
         private Settings appSettings;
 
         // Public properties to allow SettingsForm to access current device data
@@ -38,8 +39,9 @@ namespace Battify
         {
             try
             {
-                if (staticAppSettings == null || !staticAppSettings.LoggingEnabled)
-                    return;
+                // Force logging for debugging
+                // if (staticAppSettings == null || !staticAppSettings.LoggingEnabled)
+                //    return;
 
                 string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
                 File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
@@ -54,10 +56,13 @@ namespace Battify
             Log("=== Battify Started ===");
             Log($"Log file location: {logFilePath}");
             connectedDevices = new Dictionary<string, BluetoothLEDevice>();
-            lastKnownBatteryLevels = new Dictionary<string, int>();
-            lastNotificationTime = new Dictionary<string, DateTime>();
             appSettings = Settings.Load();
             staticAppSettings = appSettings;
+            
+            // Initialize lastKnownBatteryLevels from settings
+            lastKnownBatteryLevels = new Dictionary<string, int>(appSettings.LastKnownBatteryLevels);
+            lastNotificationTime = new Dictionary<string, DateTime>();
+            lastForcedUpdate = new Dictionary<string, DateTime>();
             
             // Hide the form initially
             WindowState = FormWindowState.Minimized;
@@ -135,7 +140,7 @@ namespace Battify
         private void StartBatteryMonitoring()
         {
             batteryCheckTimer = new System.Windows.Forms.Timer();
-            batteryCheckTimer.Interval = appSettings.CheckIntervalMinutes * 60 * 1000; // Convert minutes to milliseconds
+            batteryCheckTimer.Interval = appSettings.DeviceScanIntervalSeconds * 1000; // Convert seconds to milliseconds
             batteryCheckTimer.Tick += BatteryCheckTimer_Tick;
             batteryCheckTimer.Start();
             
@@ -157,46 +162,146 @@ namespace Battify
         {
             try
             {
+                // Define the property key for battery percentage
+                // This allows us to read the Windows Cache without connecting
+                string batteryPropKey = "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2";
+                string[] requestedProperties = new[] { "System.Devices.Aep.DeviceAddress", "System.Devices.Aep.IsConnected", "System.Devices.PrimaryCategory", batteryPropKey };
+
                 // Get all Bluetooth LE devices
                 string bluetoothSelector = BluetoothLEDevice.GetDeviceSelector();
                 Log($"[DEBUG] Searching for Bluetooth LE devices with selector: {bluetoothSelector}");
-                DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(bluetoothSelector);
+                
+                // Pass requested properties to get cached values
+                DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(bluetoothSelector, requestedProperties);
                 Log($"[DEBUG] Found {devices.Count} total Bluetooth LE device(s)");
 
                 var currentDevices = new Dictionary<string, BluetoothLEDevice>();
-                var batteryLevels = new Dictionary<string, int>();
+                bool settingsChanged = false;
 
                 foreach (DeviceInformation deviceInfo in devices)
                 {
                     try
                     {
                         Log($"[DEBUG] Device: {deviceInfo.Name} (ID: {deviceInfo.Id})");
+
+                        // Capture device category
+                        if (deviceInfo.Properties.TryGetValue("System.Devices.PrimaryCategory", out object? categoryObj))
+                        {
+                            string category = categoryObj?.ToString() ?? "";
+                            Log($"[DEBUG] Device: {deviceInfo.Name}, Category: '{category}' (Type: {categoryObj?.GetType().Name})");
+                            
+                            if (!string.IsNullOrEmpty(category))
+                            {
+                                if (!appSettings.DeviceCategories.ContainsKey(deviceInfo.Id) || appSettings.DeviceCategories[deviceInfo.Id] != category)
+                                {
+                                    appSettings.DeviceCategories[deviceInfo.Id] = category;
+                                    settingsChanged = true;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Log($"[DEBUG] Device: {deviceInfo.Name}, Category property not found");
+                        }
+
                         BluetoothLEDevice? device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id);
                         if (device != null)
                         {
-                            Log($"[DEBUG]   - Name: {device.Name}, Status: {device.ConnectionStatus}");
+                            Log($"[DEBUG]   - Name: {device.Name}, Status: {device.ConnectionStatus}, Appearance: {device.Appearance}");
+
+                            // Try to get category from Appearance if PrimaryCategory failed
+                            if (device.Appearance != null)
+                            {
+                                string appearanceCategory = GetCategoryFromAppearance(device.Appearance.RawValue);
+                                if (!string.IsNullOrEmpty(appearanceCategory))
+                                {
+                                    Log($"[DEBUG]   - Derived category from Appearance: {appearanceCategory}");
+                                    if (!appSettings.DeviceCategories.ContainsKey(deviceInfo.Id) || appSettings.DeviceCategories[deviceInfo.Id] != appearanceCategory)
+                                    {
+                                        appSettings.DeviceCategories[deviceInfo.Id] = appearanceCategory;
+                                        settingsChanged = true;
+                                    }
+                                }
+                            }
+
+                            if (device.ConnectionStatus == BluetoothConnectionStatus.Connected)
+
                             if (device.ConnectionStatus == BluetoothConnectionStatus.Connected)
                             {
                                 currentDevices[device.DeviceId] = device;
-                            
-                                // Try to get battery level
-                                int batteryLevel = await GetDeviceBatteryLevel(device);
-                                string deviceKey = device.Name ?? device.DeviceId;
+                                string deviceId = device.DeviceId;
+                                int batteryLevel = -1;
+
+                                // Check if we need to force an update (Slow Loop)
+                                bool forceUpdate = false;
+                                if (!lastForcedUpdate.ContainsKey(deviceId))
+                                {
+                                    forceUpdate = true; // Never updated
+                                }
+                                else
+                                {
+                                    TimeSpan timeSinceLastUpdate = DateTime.Now - lastForcedUpdate[deviceId];
+                                    if (timeSinceLastUpdate.TotalMinutes >= appSettings.BatteryUpdateIntervalMinutes)
+                                    {
+                                        forceUpdate = true; // Time to update
+                                    }
+                                }
+
+                                if (forceUpdate)
+                                {
+                                    Log($"[DEBUG] Forcing GATT read for {device.Name} (Last update: {(lastForcedUpdate.ContainsKey(deviceId) ? lastForcedUpdate[deviceId].ToString() : "Never")})");
+                                    batteryLevel = await GetDeviceBatteryLevel(device);
+                                    if (batteryLevel >= 0)
+                                    {
+                                        lastForcedUpdate[deviceId] = DateTime.Now;
+                                    }
+                                }
+                                else
+                                {
+                                    // Try to get cached value from DeviceInformation properties (Fast Loop)
+                                    if (deviceInfo.Properties.TryGetValue(batteryPropKey, out object? propVal))
+                                    {
+                                        // Handle different potential types for the property
+                                        if (propVal is int intVal) batteryLevel = intVal;
+                                        else if (propVal is byte byteVal) batteryLevel = (int)byteVal;
+                                        
+                                        if (batteryLevel >= 0)
+                                        {
+                                            Log($"[DEBUG] Using cached battery level for {device.Name}: {batteryLevel}%");
+                                        }
+                                    }
+                                    
+                                    // If cache failed, fallback to our own last known level
+                                    if (batteryLevel < 0 && lastKnownBatteryLevels.ContainsKey(deviceId))
+                                    {
+                                        batteryLevel = lastKnownBatteryLevels[deviceId];
+                                        Log($"[DEBUG] Using internal last known level for {device.Name}: {batteryLevel}%");
+                                    }
+                                }
                             
                                 if (batteryLevel >= 0)
                                 {
-                                    batteryLevels[deviceKey] = batteryLevel;
+                                    // Update settings
+                                    appSettings.LastKnownBatteryLevels[deviceId] = batteryLevel;
+                                    if (!string.IsNullOrEmpty(device.Name))
+                                    {
+                                        appSettings.DeviceNames[deviceId] = device.Name;
+                                    }
+                                    settingsChanged = true;
+                                    
+                                    // Update local dictionary
+                                    lastKnownBatteryLevels[deviceId] = batteryLevel;
                                 
                                     // Check for low battery notification only for monitored devices
-                                    if (ShouldMonitorDevice(device.DeviceId))
+                                    if (ShouldMonitorDevice(deviceId))
                                     {
                                         if (batteryLevel <= appSettings.BatteryThreshold)
                                         {
                                             // Check if we should show notification (based on interval)
-                                            if (ShouldShowNotification(deviceKey))
+                                            if (ShouldShowNotification(deviceId))
                                             {
                                                 ShowLowBatteryNotification(device.Name ?? "Unknown Device", batteryLevel);
-                                                lastNotificationTime[deviceKey] = DateTime.Now;
+                                                lastNotificationTime[deviceId] = DateTime.Now;
                                             }
                                         }
                                     }
@@ -213,13 +318,9 @@ namespace Battify
 
                 connectedDevices = currentDevices;
                 
-                // Update battery levels only if we got new data, otherwise keep the old data
-                if (batteryLevels.Count > 0)
+                if (settingsChanged)
                 {
-                    foreach (var kvp in batteryLevels)
-                    {
-                        lastKnownBatteryLevels[kvp.Key] = kvp.Value;
-                    }
+                    appSettings.Save();
                 }
                 
                 UpdateTrayIcon();
@@ -337,13 +438,27 @@ namespace Battify
             if (trayIcon == null) return;
 
             // Filter to only show monitored devices
-            var monitoredBatteryLevels = lastKnownBatteryLevels
-                .Where(kvp => ShouldMonitorDevice(GetDeviceIdByName(kvp.Key)))
-                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
-            if (connectedDevices.Count == 0 || monitoredBatteryLevels.Count == 0)
+            var monitoredBatteryLevels = new Dictionary<string, int>();
+            
+            foreach (var kvp in appSettings.LastKnownBatteryLevels)
             {
-                trayIcon.Text = "Battify - No monitored devices";
+                string deviceId = kvp.Key;
+                int level = kvp.Value;
+                
+                if (ShouldMonitorDevice(deviceId) && connectedDevices.ContainsKey(deviceId))
+                {
+                    // Use stored name or ID
+                    string name = appSettings.DeviceNames.ContainsKey(deviceId) 
+                        ? appSettings.DeviceNames[deviceId] 
+                        : "Unknown Device";
+                    
+                    monitoredBatteryLevels[name] = level;
+                }
+            }
+
+            if (monitoredBatteryLevels.Count == 0)
+            {
+                trayIcon.Text = "Battify - No connected devices";
                 trayIcon.Icon = CreateBatteryIcon(100);
             }
             else
@@ -395,81 +510,291 @@ namespace Battify
             }
         }
 
+        private string GetCategoryFromAppearance(ushort appearance)
+        {
+            // Log the raw appearance for debugging
+            Log($"[DEBUG]     - Raw Appearance: {appearance}");
+
+            // Bluetooth SIG Assigned Numbers for Appearance
+            // https://specificationrefs.bluetooth.com/assigned-values/Appearance%20Values.pdf
+            
+            if (appearance == 961) return "Keyboard";
+            if (appearance == 962) return "Mouse";
+            if (appearance == 963 || appearance == 964) return "Game Controller";
+            if (appearance == 965) return "Pen";
+            if (appearance == 966) return "Card Reader";
+            if (appearance == 967) return "Pen";
+            if (appearance == 968) return "Barcode Scanner";
+            if (appearance >= 960 && appearance <= 968) return "Input Device"; // Generic HID
+            
+            if (appearance == 64) return "Phone";
+            if (appearance == 128) return "Computer";
+            if (appearance == 192 || appearance == 193) return "Watch";
+            if (appearance == 448 || appearance == 449 || appearance == 450) return "Eye Glasses";
+            if (appearance == 512) return "Tag";
+            if (appearance == 576 || appearance == 577) return "Keyring";
+            if (appearance == 640) return "Media Player";
+            if (appearance == 704) return "Barcode Scanner";
+            if (appearance == 768) return "Thermometer";
+            if (appearance == 832 || appearance == 833) return "Heart Rate Monitor";
+            
+            return "";
+        }
+
+        private string GetDeviceIcon(string category)
+        {
+            // Segoe MDL2 Assets glyphs
+            if (string.IsNullOrEmpty(category)) 
+            {
+                return "\uE702"; // Generic Bluetooth
+            }
+
+            string originalCategory = category;
+            category = category.ToLowerInvariant();
+            
+            // Log the category we are checking against (only if it's not empty, to avoid spam)
+            // Log($"[DEBUG] Checking icon for category: '{originalCategory}'");
+
+            if (category.Contains("mouse")) return "\uE962";
+            if (category.Contains("keyboard")) return "\uE92E";
+            if (category.Contains("headphone") || category.Contains("headset") || category.Contains("earbud") || category.Contains("audio")) return "\uE7F5";
+            if (category.Contains("phone")) return "\uE8EA";
+            if (category.Contains("computer") || category.Contains("laptop") || category.Contains("pc")) return "\uE7F8";
+            if (category.Contains("game") || category.Contains("controller") || category.Contains("joystick")) return "\uE7FC";
+            if (category.Contains("pen") || category.Contains("stylus")) return "\uED35";
+            if (category.Contains("watch") || category.Contains("wearable")) return "\uE916"; 
+            if (category.Contains("remote")) return "\uE88E"; // Remote Control
+            // if (category.Contains("input")) return "\uE962"; // Fallback for generic HID to Mouse icon (most common) 
+
+            return "\uE702"; // Generic Bluetooth
+        }
+
         private void ShowConnectedDevices(object? sender, EventArgs e)
         {
-            if (connectedDevices.Count == 0)
+            // Create a custom form for the connected devices dialog
+            Form dialog = new Form
             {
-                MessageBox.Show("No connected Bluetooth devices found.", "Connected Devices", 
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                Text = "Connected Devices",
+                Size = new Size(450, 500),
+                StartPosition = FormStartPosition.CenterScreen,
+                MaximizeBox = false,
+                MinimizeBox = false
+            };
+            ModernTheme.ApplyTheme(dialog);
+
+            try
+            {
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "battify_icon_full.png");
+                if (File.Exists(iconPath))
+                {
+                    dialog.Icon = IconFromPng(iconPath);
+                }
+            }
+            catch { }
+
+            // Force window to front when shown
+            dialog.Shown += (s, args) => {
+                dialog.Activate();
+                dialog.TopMost = true;
+                dialog.TopMost = false;
+            };
+
+            var mainContainer = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoScroll = true,
+                Padding = new Padding(20),
+                BackColor = ModernTheme.BackgroundColor
+            };
+
+            var titleLabel = new Label
+            {
+                Text = "Device Status",
+                Font = ModernTheme.HeaderFont,
+                ForeColor = ModernTheme.TextColor,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 20)
+            };
+            mainContainer.Controls.Add(titleLabel);
+
+            // Collect all devices to show
+            var devicesToShow = new List<(string Name, string DeviceId, int BatteryLevel, bool IsConnected, bool IsMonitored)>();
+
+            // Add connected devices
+            foreach (var device in connectedDevices.Values)
+            {
+                string deviceId = device.DeviceId;
+                string name = device.Name ?? "Unknown Device";
+                int batteryLevel = -1;
+                if (appSettings.LastKnownBatteryLevels.ContainsKey(deviceId))
+                    batteryLevel = appSettings.LastKnownBatteryLevels[deviceId];
+                
+                bool isMonitored = ShouldMonitorDevice(deviceId);
+                devicesToShow.Add((name, deviceId, batteryLevel, true, isMonitored));
+            }
+
+            // Add disconnected monitored devices
+            foreach (var kvp in appSettings.LastKnownBatteryLevels)
+            {
+                string deviceId = kvp.Key;
+                // Only add if not already added as connected
+                if (!connectedDevices.ContainsKey(deviceId) && ShouldMonitorDevice(deviceId))
+                {
+                    string name = appSettings.DeviceNames.ContainsKey(deviceId) ? appSettings.DeviceNames[deviceId] : "Unknown Device";
+                    int batteryLevel = kvp.Value;
+                    devicesToShow.Add((name, deviceId, batteryLevel, false, true));
+                }
+            }
+
+            if (devicesToShow.Count == 0)
+            {
+                var noDevicesLabel = new Label
+                {
+                    Text = "No connected or monitored devices found.",
+                    Font = ModernTheme.BodyFont,
+                    ForeColor = ModernTheme.SecondaryTextColor,
+                    AutoSize = true,
+                    Margin = new Padding(5)
+                };
+                mainContainer.Controls.Add(noDevicesLabel);
             }
             else
             {
-                // Create a custom form for the connected devices dialog
-                Form dialog = new Form
+                foreach (var device in devicesToShow)
                 {
-                    Text = "Connected Devices",
-                    Size = new Size(400, 250),
-                    StartPosition = FormStartPosition.CenterScreen,
-                    FormBorderStyle = FormBorderStyle.FixedDialog,
-                    MaximizeBox = false,
-                    MinimizeBox = false
-                };
+                    var deviceCard = new ModernTheme.CardPanel
+                    {
+                        Width = 390,
+                        Height = 90,
+                        Margin = new Padding(0, 0, 0, 15)
+                    };
 
-                Label label = new Label
-                {
-                    AutoSize = false,
-                    Location = new Point(20, 20),
-                    Size = new Size(340, 140),
-                    Font = new Font("Segoe UI", 9F)
-                };
+                    // Device Icon
+                    string category = appSettings.DeviceCategories.ContainsKey(device.DeviceId) ? appSettings.DeviceCategories[device.DeviceId] : "";
+                    var iconLabel = new Label
+                    {
+                        Text = GetDeviceIcon(category),
+                        Font = new Font("Segoe MDL2 Assets", 24),
+                        ForeColor = device.IsConnected ? ModernTheme.TextColor : ModernTheme.SecondaryTextColor,
+                        Location = new Point(15, 25),
+                        AutoSize = true
+                    };
+                    deviceCard.Controls.Add(iconLabel);
 
-                string message = "Connected Bluetooth Devices:\n\n";
-                foreach (var device in connectedDevices.Values)
-                {
-                    string deviceName = device.Name ?? "Unknown Device";
-                    string batteryInfo = lastKnownBatteryLevels.ContainsKey(deviceName) 
-                        ? $" (Battery: {lastKnownBatteryLevels[deviceName]}%)"
-                        : " (Battery: Not available)";
-                    bool isMonitored = ShouldMonitorDevice(device.DeviceId);
-                    string monitoringStatus = isMonitored ? " [Monitored]" : "";
-                    message += $"• {deviceName}{batteryInfo}{monitoringStatus}\n";
+                    var nameLabel = new Label
+                    {
+                        Text = device.Name,
+                        Font = ModernTheme.SubHeaderFont,
+                        ForeColor = device.IsConnected ? ModernTheme.TextColor : ModernTheme.SecondaryTextColor,
+                        Location = new Point(65, 15),
+                        AutoSize = true
+                    };
+                    deviceCard.Controls.Add(nameLabel);
+
+                    // Battery Bar
+                    if (device.BatteryLevel >= 0)
+                    {
+                        var batteryLabel = new Label
+                        {
+                            Text = $"{device.BatteryLevel}%",
+                            Font = ModernTheme.SubHeaderFont,
+                            ForeColor = device.IsConnected ? ModernTheme.AccentColor : ModernTheme.SecondaryTextColor,
+                            Location = new Point(330, 15),
+                            AutoSize = true,
+                            TextAlign = ContentAlignment.TopRight
+                        };
+                        deviceCard.Controls.Add(batteryLabel);
+
+                        var batteryBarBg = new System.Windows.Forms.Panel
+                        {
+                            Location = new Point(65, 45),
+                            Size = new Size(310, 6),
+                            BackColor = Color.FromArgb(230, 230, 230)
+                        };
+                        
+                        var batteryBarFill = new System.Windows.Forms.Panel
+                        {
+                            Height = 6,
+                            Width = (int)(310 * (device.BatteryLevel / 100.0)),
+                            BackColor = device.IsConnected 
+                                ? (device.BatteryLevel > 20 ? ModernTheme.AccentColor : Color.Red)
+                                : Color.Gray
+                        };
+                        batteryBarBg.Controls.Add(batteryBarFill);
+                        deviceCard.Controls.Add(batteryBarBg);
+                    }
+                    else
+                    {
+                        var statusLabel = new Label
+                        {
+                            Text = "Battery level not available",
+                            Font = ModernTheme.BodyFont,
+                            ForeColor = ModernTheme.SecondaryTextColor,
+                            Location = new Point(65, 45),
+                            AutoSize = true
+                        };
+                        deviceCard.Controls.Add(statusLabel);
+                    }
+
+                    if (device.IsMonitored)
+                    {
+                        var monitoredLabel = new Label
+                        {
+                            Text = "Monitored" + (device.IsConnected ? "" : " (Disconnected)"),
+                            Font = ModernTheme.SmallFont,
+                            ForeColor = device.IsConnected ? Color.Green : Color.Gray,
+                            Location = new Point(65, 60),
+                            AutoSize = true
+                        };
+                        deviceCard.Controls.Add(monitoredLabel);
+                    }
+
+                    mainContainer.Controls.Add(deviceCard);
                 }
-                label.Text = message;
-
-                Button helpButton = new Button
-                {
-                    Text = "?",
-                    Location = new Point(20, 170),
-                    Size = new Size(30, 30),
-                    Font = new Font("Segoe UI", 10F, FontStyle.Bold),
-                    FlatStyle = FlatStyle.System
-                };
-                helpButton.Click += (s, args) => 
-                {
-                    MessageBox.Show(
-                        "Battery monitoring requires devices with GATT Battery Service support.\n\n" +
-                        "Not all Bluetooth devices report battery levels. The device must implement " +
-                        "the Bluetooth GATT Battery Service (UUID: 0x180F) for battery monitoring to work.",
-                        "Battery Monitoring Info",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.None);
-                };
-
-                Button okButton = new Button
-                {
-                    Text = "OK",
-                    DialogResult = DialogResult.OK,
-                    Location = new Point(285, 170),
-                    Size = new Size(75, 30)
-                };
-
-                dialog.Controls.Add(label);
-                dialog.Controls.Add(helpButton);
-                dialog.Controls.Add(okButton);
-                dialog.AcceptButton = okButton;
-
-                dialog.ShowDialog();
             }
+
+            var actionPanel = new System.Windows.Forms.Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 60,
+                BackColor = ModernTheme.BackgroundColor,
+                Padding = new Padding(0, 10, 20, 10)
+            };
+
+            var helpButton = new ModernTheme.ModernButton
+            {
+                Text = "Help",
+                Location = new Point(20, 15),
+                Size = new Size(80, 32)
+            };
+            helpButton.Click += (s, args) => 
+            {
+                MessageBox.Show(
+                    "Battery monitoring requires devices with GATT Battery Service support.\n\n" +
+                    "Not all Bluetooth devices report battery levels. The device must implement " +
+                    "the Bluetooth GATT Battery Service (UUID: 0x180F) for battery monitoring to work.",
+                    "Battery Monitoring Info",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            };
+            actionPanel.Controls.Add(helpButton);
+
+            var closeButton = new ModernTheme.PrimaryButton
+            {
+                Text = "Close",
+                Location = new Point(330, 15),
+                Size = new Size(90, 32),
+                DialogResult = DialogResult.OK
+            };
+            actionPanel.Controls.Add(closeButton);
+
+            dialog.Controls.Add(mainContainer);
+            dialog.Controls.Add(actionPanel);
+            dialog.AcceptButton = closeButton;
+
+            dialog.ShowDialog();
         }
 
         private void ShowSettings(object? sender, EventArgs e)
@@ -512,13 +837,25 @@ namespace Battify
                 MaximizeBox = false,
                 MinimizeBox = false
             };
+            ModernTheme.ApplyTheme(aboutDialog);
+
+            try
+            {
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "battify_icon_full.png");
+                if (File.Exists(iconPath))
+                {
+                    aboutDialog.Icon = IconFromPng(iconPath);
+                }
+            }
+            catch { }
 
             // Load and display icon
             PictureBox iconBox = new PictureBox
             {
                 Location = new Point(100, 20),
                 Size = new Size(150, 150),
-                SizeMode = PictureBoxSizeMode.Zoom
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Transparent
             };
 
             try
@@ -567,7 +904,8 @@ namespace Battify
                 Location = new Point(20, 180),
                 Size = new Size(310, 30),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Font = new Font("Segoe UI", 16F, FontStyle.Bold)
+                Font = ModernTheme.HeaderFont,
+                ForeColor = ModernTheme.TextColor
             };
 
             Label versionLabel = new Label
@@ -576,7 +914,8 @@ namespace Battify
                 Location = new Point(20, 210),
                 Size = new Size(310, 20),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Font = new Font("Segoe UI", 9F)
+                Font = ModernTheme.BodyFont,
+                ForeColor = ModernTheme.SecondaryTextColor
             };
 
             LinkLabel githubLink = new LinkLabel
@@ -585,7 +924,10 @@ namespace Battify
                 Location = new Point(20, 235),
                 Size = new Size(310, 20),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Font = new Font("Segoe UI", 9F)
+                Font = ModernTheme.BodyFont,
+                LinkColor = ModernTheme.AccentColor,
+                ActiveLinkColor = ControlPaint.Dark(ModernTheme.AccentColor),
+                VisitedLinkColor = ModernTheme.AccentColor
             };
             githubLink.LinkClicked += (s, e) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
@@ -593,7 +935,7 @@ namespace Battify
                 UseShellExecute = true
             });
 
-            Button okButton = new Button
+            var okButton = new ModernTheme.PrimaryButton
             {
                 Text = "OK",
                 DialogResult = DialogResult.OK,
@@ -627,6 +969,45 @@ namespace Battify
             {
                 e.Cancel = true;
                 Hide();
+            }
+        }
+
+        private Icon IconFromPng(string path)
+        {
+            using (var stream = new MemoryStream())
+            {
+                using (var bitmap = new Bitmap(path))
+                {
+                    // Write Icon Header
+                    stream.Write(BitConverter.GetBytes((short)0), 0, 2); // Reserved
+                    stream.Write(BitConverter.GetBytes((short)1), 0, 2); // Type (1=Icon)
+                    stream.Write(BitConverter.GetBytes((short)1), 0, 2); // Count
+
+                    // Write Icon Directory Entry
+                    var width = bitmap.Width >= 256 ? 0 : bitmap.Width;
+                    var height = bitmap.Height >= 256 ? 0 : bitmap.Height;
+                    stream.WriteByte((byte)width);
+                    stream.WriteByte((byte)height);
+                    stream.WriteByte(0); // ColorCount
+                    stream.WriteByte(0); // Reserved
+                    stream.Write(BitConverter.GetBytes((short)1), 0, 2); // Planes
+                    stream.Write(BitConverter.GetBytes((short)32), 0, 2); // BitCount
+                    
+                    // Write Image Data
+                    using (var memoryStream = new MemoryStream())
+                    {
+                        bitmap.Save(memoryStream, System.Drawing.Imaging.ImageFormat.Png);
+                        var iconImageBytes = memoryStream.ToArray();
+                        
+                        stream.Write(BitConverter.GetBytes(iconImageBytes.Length), 0, 4); // SizeInBytes
+                        stream.Write(BitConverter.GetBytes(22), 0, 4); // ImageOffset (6 + 16)
+                        
+                        stream.Write(iconImageBytes, 0, iconImageBytes.Length);
+                    }
+                    
+                    stream.Seek(0, SeekOrigin.Begin);
+                    return new Icon(stream);
+                }
             }
         }
 

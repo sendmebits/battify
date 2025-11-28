@@ -26,19 +26,62 @@ namespace Battify
         public Dictionary<string, string> DeviceNames { get; set; } = new Dictionary<string, string>();
 
         /// <summary>
+        /// Dictionary mapping device IDs to their last known battery levels
+        /// </summary>
+        public Dictionary<string, int> LastKnownBatteryLevels { get; set; } = new Dictionary<string, int>();
+
+        /// <summary>
+        /// Dictionary mapping device IDs to their device categories (e.g. Mouse, Keyboard)
+        /// </summary>
+        public Dictionary<string, string> DeviceCategories { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
         /// Battery threshold percentage (1-100). Notifications trigger when battery drops below this.
         /// </summary>
-        public int BatteryThreshold { get; set; } = 20;
+        public int BatteryThreshold { get; set; } = 25;
 
         /// <summary>
         /// Notification repeat interval in minutes
         /// </summary>
-        public int NotificationIntervalMinutes { get; set; } = 30;
+        public int NotificationIntervalMinutes { get; set; } = 60;
 
         /// <summary>
-        /// Battery check interval in minutes
+        /// How often to scan for connected devices and read cached values (Fast loop).
+        /// Default: 60 seconds.
         /// </summary>
-        public int CheckIntervalMinutes { get; set; } = 1;
+        public int DeviceScanIntervalSeconds { get; set; } = 60;
+
+        private int _batteryUpdateIntervalMinutes = 90;
+
+        /// <summary>
+        /// How often to force a fresh battery reading from the device (Slow loop).
+        /// Default: 30 minutes.
+        /// </summary>
+        public int BatteryUpdateIntervalMinutes 
+        { 
+            get => _batteryUpdateIntervalMinutes;
+            set 
+            {
+                _batteryUpdateIntervalMinutes = value;
+                _checkIntervalMinutes = value; // Keep legacy property in sync
+            }
+        }
+
+        private int _checkIntervalMinutes = 30;
+
+        /// <summary>
+        /// Legacy setting. Kept for backward compatibility with existing settings.json files.
+        /// Maps directly to BatteryUpdateIntervalMinutes.
+        /// </summary>
+        public int CheckIntervalMinutes 
+        { 
+            get => _checkIntervalMinutes;
+            set 
+            {
+                _checkIntervalMinutes = value;
+                _batteryUpdateIntervalMinutes = value; // Keep new property in sync
+            }
+        }
 
         /// <summary>
         /// Enable debug logging
