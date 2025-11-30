@@ -17,9 +17,9 @@ Standalone app zip file include with each version in the <a href=https://github.
 - **Quick Access Menu**: Right-click tray icon for options to view battery levels, refresh, or exit
 - **Device Information**: View all connected Bluetooth devices and their battery status
 
-### Customizable settings:
+### Double click to quickly view all devices:
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/ed8df238-f410-4048-b106-3a07f208e2ea" alt="settings" width="280" />
+  <img src="https://github.com/user-attachments/assets/3b1fcb6e-c427-4c2e-ae4a-06e770df8559" alt="connected_devices" width="280" />
 </p>
 
 ### At a glance battery level in system tray:
@@ -27,11 +27,10 @@ Standalone app zip file include with each version in the <a href=https://github.
   <img src="https://github.com/user-attachments/assets/4d573ea6-438c-4249-b62a-06d40bde91fc" alt="system_tray" width="280" />
 </p>
 
-### Double click to quickly view all devices:
+### Customizable settings:
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/3b1fcb6e-c427-4c2e-ae4a-06e770df8559" alt="connected_devices" width="280" />
+  <img src="https://github.com/user-attachments/assets/ed8df238-f410-4048-b106-3a07f208e2ea" alt="settings" width="280" />
 </p>
-
 
 ## Requirements
 
