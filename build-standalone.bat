@@ -72,4 +72,3 @@ echo.
 echo This package includes the .NET runtime
 echo and can run on any Windows 10+ machine.
 echo.
-pause

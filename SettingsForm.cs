@@ -21,7 +21,9 @@ namespace Battify
         private NumericUpDown? deviceScanIntervalNumeric; // Maps to DeviceScanIntervalMinutes (Fast loop)
         private CheckBox? loggingCheckBox;
         private CheckBox? startWithWindowsCheckBox;
+        private CheckBox? checkForUpdatesCheckBox;
         private Button? viewLogButton;
+        private Button? checkUpdatesNowButton;
         private Button? saveButton;
         private Button? cancelButton;
         private Button? refreshButton;
@@ -145,7 +147,7 @@ namespace Battify
         {
             ModernTheme.ApplyTheme(this);
             this.Text = "Battify Settings";
-            this.Size = new Size(450, 700);
+            this.Size = new Size(450, 740);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -383,7 +385,7 @@ namespace Battify
             mainContainer.Controls.Add(notifyCard);
 
             // --- System Card ---
-            var systemCard = new ModernTheme.CardPanel { Width = 390, Height = 120 };
+            var systemCard = new ModernTheme.CardPanel { Width = 390, Height = 160 };
             
             var systemHeader = new Label
             {
@@ -405,10 +407,29 @@ namespace Battify
             };
             systemCard.Controls.Add(startWithWindowsCheckBox);
 
+            checkForUpdatesCheckBox = new CheckBox
+            {
+                Text = "Check for updates automatically",
+                Location = new Point(15, 75),
+                AutoSize = true,
+                Font = ModernTheme.BodyFont,
+                FlatStyle = FlatStyle.Flat
+            };
+            systemCard.Controls.Add(checkForUpdatesCheckBox);
+
+            checkUpdatesNowButton = new ModernTheme.ModernButton
+            {
+                Text = "Check Now",
+                Location = new Point(270, 70),
+                Size = new Size(90, 25)
+            };
+            checkUpdatesNowButton.Click += CheckUpdatesNowButton_Click;
+            systemCard.Controls.Add(checkUpdatesNowButton);
+
             loggingCheckBox = new CheckBox
             {
                 Text = "Enable Debug Logging",
-                Location = new Point(15, 75),
+                Location = new Point(15, 105),
                 AutoSize = true,
                 Font = ModernTheme.BodyFont,
                 FlatStyle = FlatStyle.Flat
@@ -419,7 +440,7 @@ namespace Battify
             viewLogButton = new ModernTheme.ModernButton
             {
                 Text = "View Log",
-                Location = new Point(250, 70),
+                Location = new Point(250, 100),
                 Size = new Size(80, 25),
                 Visible = false
             };
@@ -496,6 +517,12 @@ namespace Battify
                     settings.StartWithWindows = registryEnabled;
                 }
                 startWithWindowsCheckBox.Checked = settings.StartWithWindows;
+            }
+
+            // Load update checking setting
+            if (checkForUpdatesCheckBox != null)
+            {
+                checkForUpdatesCheckBox.Checked = settings.CheckForUpdates;
             }
         }
 
@@ -703,6 +730,10 @@ namespace Battify
             if (loggingCheckBox != null)
                 settings.LoggingEnabled = loggingCheckBox.Checked;
 
+            // Save update checking setting
+            if (checkForUpdatesCheckBox != null)
+                settings.CheckForUpdates = checkForUpdatesCheckBox.Checked;
+
             // Save start with Windows setting
             if (startWithWindowsCheckBox != null)
             {
@@ -785,6 +816,28 @@ namespace Battify
                 closeTimer?.Dispose();
             }
             base.Dispose(disposing);
+        }
+
+        private async void CheckUpdatesNowButton_Click(object? sender, EventArgs e)
+        {
+            if (checkUpdatesNowButton != null)
+            {
+                checkUpdatesNowButton.Enabled = false;
+                checkUpdatesNowButton.Text = "Checking...";
+            }
+
+            try
+            {
+                await mainForm.CheckForUpdatesAsync(silent: false);
+            }
+            finally
+            {
+                if (checkUpdatesNowButton != null)
+                {
+                    checkUpdatesNowButton.Enabled = true;
+                    checkUpdatesNowButton.Text = "Check Now";
+                }
+            }
         }
 
         private void LoggingCheckBox_CheckedChanged(object? sender, EventArgs e)

@@ -95,6 +95,26 @@ namespace Battify
         public bool StartWithWindows { get; set; } = false;
 
         /// <summary>
+        /// Enable automatic update checking
+        /// </summary>
+        public bool CheckForUpdates { get; set; } = true;
+
+        /// <summary>
+        /// How often to check for updates (in hours). Default: 24 (once per day)
+        /// </summary>
+        public int UpdateCheckIntervalHours { get; set; } = 24;
+
+        /// <summary>
+        /// Last time we checked for updates (UTC)
+        /// </summary>
+        public DateTime LastUpdateCheckUtc { get; set; } = DateTime.MinValue;
+
+        /// <summary>
+        /// Version that user chose to skip (won't be notified about this version again)
+        /// </summary>
+        public string SkippedVersion { get; set; } = string.Empty;
+
+        /// <summary>
         /// Load settings from disk
         /// </summary>
         public static Settings Load()

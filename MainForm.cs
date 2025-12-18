@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Windows.Devices.Bluetooth;
@@ -37,6 +39,14 @@ namespace Battify
         private DeviceWatcher? deviceWatcher;
         private DateTime lastWatcherTriggered = DateTime.MinValue;
         private const int WATCHER_THROTTLE_SECONDS = 5; // Prevent event storms
+
+        // Update checking
+        private static readonly HttpClient httpClient = new HttpClient();
+        private const string GITHUB_RELEASES_API = "https://api.github.com/repos/sendmebits/battify/releases/latest";
+        private const string GITHUB_RELEASES_URL = "https://github.com/sendmebits/battify/releases";
+        private string? latestVersionUrl; // Store URL to open when balloon is clicked
+        private bool hasUpdateAvailable; // Track if update badge should be shown
+        private string? availableVersion; // Store the available version for display
 
         // Public properties to allow SettingsForm to access current device data
         public Dictionary<string, BluetoothLEDevice> ConnectedDevices => connectedDevices;
@@ -119,6 +129,7 @@ namespace Battify
             };
 
             trayIcon.DoubleClick += TrayIcon_DoubleClick;
+            trayIcon.BalloonTipClicked += TrayIcon_BalloonTipClicked;
         }
 
         private Icon CreateBatteryIcon(int batteryLevel)
@@ -147,6 +158,15 @@ namespace Battify
                 
                 if (batteryLevel > 30)
                     fillBrush.Dispose();
+                
+                // Add update badge if update is available
+                if (hasUpdateAvailable)
+                {
+                    // Draw a small red/orange circle with white border in top-right
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    g.FillEllipse(Brushes.White, 9, 0, 7, 7); // White border
+                    g.FillEllipse(Brushes.OrangeRed, 10, 1, 5, 5); // Orange-red dot
+                }
             }
             
             // Create icon and dispose bitmap
@@ -176,6 +196,13 @@ namespace Battify
             
             // Initial check
             RefreshDevices(null, EventArgs.Empty);
+
+            // Check for updates after a short delay (don't slow down startup)
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(5000); // Wait 5 seconds after startup
+                await CheckForUpdatesAsync(silent: true);
+            });
         }
 
         #region DeviceWatcher (Tier 1 - Event-Driven)
@@ -830,6 +857,66 @@ namespace Battify
             };
             mainContainer.Controls.Add(titleLabel);
 
+            // Show update banner if available
+            if (hasUpdateAvailable && !string.IsNullOrEmpty(availableVersion))
+            {
+                var updateBanner = new System.Windows.Forms.Panel
+                {
+                    Width = 390,
+                    Height = 50,
+                    BackColor = Color.FromArgb(255, 244, 229), // Light orange background
+                    Margin = new Padding(0, 0, 0, 15)
+                };
+
+                var updateIcon = new Label
+                {
+                    Text = "\uE946", // Update icon
+                    Font = new Font("Segoe MDL2 Assets", 14),
+                    ForeColor = Color.FromArgb(200, 100, 0),
+                    Location = new Point(12, 14),
+                    AutoSize = true
+                };
+                updateBanner.Controls.Add(updateIcon);
+
+                var updateText = new Label
+                {
+                    Text = $"Version {availableVersion} available",
+                    Font = new Font(ModernTheme.BodyFont, FontStyle.Bold),
+                    ForeColor = Color.FromArgb(100, 60, 0),
+                    Location = new Point(45, 8),
+                    AutoSize = true
+                };
+                updateBanner.Controls.Add(updateText);
+
+                var downloadLink = new LinkLabel
+                {
+                    Text = "Download now",
+                    Font = ModernTheme.BodyFont,
+                    LinkColor = ModernTheme.AccentColor,
+                    Location = new Point(45, 27),
+                    AutoSize = true
+                };
+                downloadLink.LinkClicked += (s, args) =>
+                {
+                    if (!string.IsNullOrEmpty(latestVersionUrl))
+                    {
+                        try
+                        {
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                            {
+                                FileName = latestVersionUrl,
+                                UseShellExecute = true
+                            });
+                            ClearUpdateBadge();
+                        }
+                        catch { }
+                    }
+                };
+                updateBanner.Controls.Add(downloadLink);
+
+                mainContainer.Controls.Add(updateBanner);
+            }
+
             // Collect all devices to show
             var devicesToShow = new List<(string Name, string DeviceId, int BatteryLevel, bool IsConnected, bool IsMonitored)>();
 
@@ -1225,6 +1312,348 @@ namespace Battify
                     return new Icon(stream);
                 }
             }
+        }
+
+        private void TrayIcon_BalloonTipClicked(object? sender, EventArgs e)
+        {
+            // Open the releases page when update notification is clicked
+            if (!string.IsNullOrEmpty(latestVersionUrl))
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = latestVersionUrl,
+                        UseShellExecute = true
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log($"[UPDATE] Failed to open URL: {ex.Message}");
+                }
+                latestVersionUrl = null; // Clear after opening
+            }
+        }
+
+        /// <summary>
+        /// Check for updates from GitHub releases
+        /// </summary>
+        /// <param name="silent">If true, only show notification if update available. If false, show message even if up-to-date.</param>
+        /// <returns>True if an update is available</returns>
+        public async Task<bool> CheckForUpdatesAsync(bool silent = true)
+        {
+            // Skip if update checking is disabled
+            if (!appSettings.CheckForUpdates && silent)
+            {
+                Log("[UPDATE] Update checking is disabled");
+                return false;
+            }
+
+            // Check if enough time has passed since last check (only for silent/automatic checks)
+            if (silent)
+            {
+                var timeSinceLastCheck = DateTime.UtcNow - appSettings.LastUpdateCheckUtc;
+                if (timeSinceLastCheck.TotalHours < appSettings.UpdateCheckIntervalHours)
+                {
+                    Log($"[UPDATE] Skipping check - last check was {timeSinceLastCheck.TotalHours:F1} hours ago");
+                    return false;
+                }
+            }
+
+            try
+            {
+                Log("[UPDATE] Checking for updates...");
+
+                // GitHub API requires User-Agent header
+                httpClient.DefaultRequestHeaders.Clear();
+                httpClient.DefaultRequestHeaders.Add("User-Agent", "Battify-UpdateChecker");
+                httpClient.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+
+                var response = await httpClient.GetStringAsync(GITHUB_RELEASES_API);
+                
+                // Update last check time
+                appSettings.LastUpdateCheckUtc = DateTime.UtcNow;
+                appSettings.Save();
+
+                // Parse the JSON response
+                using var doc = JsonDocument.Parse(response);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("tag_name", out var tagElement))
+                {
+                    Log("[UPDATE] No tag_name found in response");
+                    return false;
+                }
+
+                string latestTag = tagElement.GetString() ?? "";
+                string htmlUrl = root.TryGetProperty("html_url", out var urlElement) 
+                    ? urlElement.GetString() ?? GITHUB_RELEASES_URL 
+                    : GITHUB_RELEASES_URL;
+
+                // Parse version from tag (remove 'v' prefix if present)
+                string latestVersionStr = latestTag.TrimStart('v', 'V');
+                
+                // Get current version
+                var currentVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+                string currentVersionStr = currentVersion != null 
+                    ? $"{currentVersion.Major}.{currentVersion.Minor}.{currentVersion.Build}" 
+                    : "0.0.0";
+
+                Log($"[UPDATE] Current version: {currentVersionStr}, Latest version: {latestVersionStr}");
+
+                // Compare versions
+                if (Version.TryParse(latestVersionStr, out var latestVersion) &&
+                    Version.TryParse(currentVersionStr, out var currentParsed))
+                {
+                    if (latestVersion > currentParsed)
+                    {
+                        // Check if user has skipped this version
+                        if (silent && appSettings.SkippedVersion == latestVersionStr)
+                        {
+                            Log($"[UPDATE] User has skipped version {latestVersionStr}");
+                            return false;
+                        }
+
+                        Log($"[UPDATE] New version available: {latestVersionStr}");
+                        
+                        // Store URL for balloon click handler
+                        latestVersionUrl = htmlUrl;
+
+                        // Set badge on tray icon (for both manual and automatic checks)
+                        hasUpdateAvailable = true;
+                        availableVersion = latestVersionStr;
+                        
+                        // Force immediate icon update on UI thread
+                        if (this.InvokeRequired)
+                        {
+                            this.Invoke(new Action(() => UpdateTrayIcon())); // Use Invoke to ensure it completes before continuing
+                        }
+                        else
+                        {
+                            UpdateTrayIcon();
+                            Application.DoEvents(); // Force UI refresh before MessageBox blocks
+                        }
+
+                        if (!silent)
+                        {
+                            // Manual check - show dialog with option to open download page
+                            var result = MessageBox.Show(
+                                $"A new version of Battify is available!\n\nCurrent version: {currentVersionStr}\nLatest version: {latestVersionStr}\n\nWould you like to open the download page?",
+                                "Update Available",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Information);
+                            
+                            if (result == DialogResult.Yes)
+                            {
+                                try
+                                {
+                                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                                    {
+                                        FileName = htmlUrl,
+                                        UseShellExecute = true
+                                    });
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log($"[UPDATE] Failed to open URL: {ex.Message}");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Silent/automatic check - show popup notification
+                            if (this.InvokeRequired)
+                            {
+                                this.BeginInvoke(new Action(() => ShowUpdatePopup(latestVersionStr)));
+                            }
+                            else
+                            {
+                                ShowUpdatePopup(latestVersionStr);
+                            }
+                        }
+                        return true;
+                    }
+                    else
+                    {
+                        Log("[UPDATE] Application is up to date");
+                        if (!silent)
+                        {
+                            MessageBox.Show(
+                                $"Battify is up to date!\n\nCurrent version: {currentVersionStr}",
+                                "Update Check",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information);
+                        }
+                    }
+                }
+                else
+                {
+                    Log($"[UPDATE] Could not parse versions for comparison");
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                Log($"[UPDATE] Network error checking for updates: {ex.Message}");
+                if (!silent)
+                {
+                    MessageBox.Show(
+                        $"Could not check for updates.\n\nPlease check your internet connection and try again.",
+                        "Update Check Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[UPDATE] Error checking for updates: {ex.Message}");
+                if (!silent)
+                {
+                    MessageBox.Show(
+                        $"An error occurred while checking for updates:\n{ex.Message}",
+                        "Update Check Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
+            }
+
+            return false;
+        }
+
+        private void ShowUpdateNotification(string newVersion)
+        {
+            // Set badge state and store version
+            hasUpdateAvailable = true;
+            availableVersion = newVersion;
+            
+            // Update tray icon to show badge
+            UpdateTrayIcon();
+            
+            // Show custom notification popup (more reliable than balloon tips on Windows 11)
+            ShowUpdatePopup(newVersion);
+        }
+
+        private void ShowUpdatePopup(string newVersion)
+        {
+            // Create a custom notification form
+            var popup = new Form
+            {
+                FormBorderStyle = FormBorderStyle.None,
+                StartPosition = FormStartPosition.Manual,
+                Size = new Size(300, 100),
+                BackColor = Color.White,
+                TopMost = true,
+                ShowInTaskbar = false
+            };
+
+            // Add subtle border
+            popup.Paint += (s, e) =>
+            {
+                e.Graphics.DrawRectangle(new Pen(Color.FromArgb(200, 200, 200)), 0, 0, popup.Width - 1, popup.Height - 1);
+            };
+
+            // Icon/title area
+            var titleLabel = new Label
+            {
+                Text = "\uE946", // Update icon from Segoe MDL2
+                Font = new Font("Segoe MDL2 Assets", 16),
+                ForeColor = ModernTheme.AccentColor,
+                Location = new Point(10, 15),
+                AutoSize = true
+            };
+            popup.Controls.Add(titleLabel);
+
+            var headerLabel = new Label
+            {
+                Text = "Battify Update Available",
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                ForeColor = Color.FromArgb(30, 30, 30),
+                Location = new Point(45, 12),
+                AutoSize = true
+            };
+            popup.Controls.Add(headerLabel);
+
+            var messageLabel = new Label
+            {
+                Text = $"Version {newVersion} is available to download.",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = Color.FromArgb(80, 80, 80),
+                Location = new Point(45, 35),
+                AutoSize = true
+            };
+            popup.Controls.Add(messageLabel);
+
+            // Download button
+            var downloadBtn = new Button
+            {
+                Text = "Download",
+                FlatStyle = FlatStyle.Flat,
+                BackColor = ModernTheme.AccentColor,
+                ForeColor = Color.White,
+                Size = new Size(80, 28),
+                Location = new Point(120, 62),
+                Cursor = Cursors.Hand
+            };
+            downloadBtn.FlatAppearance.BorderSize = 0;
+            downloadBtn.Click += (s, e) =>
+            {
+                popup.Close();
+                ClearUpdateBadge();
+                if (!string.IsNullOrEmpty(latestVersionUrl))
+                {
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = latestVersionUrl,
+                            UseShellExecute = true
+                        });
+                    }
+                    catch { }
+                }
+            };
+            popup.Controls.Add(downloadBtn);
+
+            // Dismiss button
+            var dismissBtn = new Button
+            {
+                Text = "Later",
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(240, 240, 240),
+                ForeColor = Color.FromArgb(60, 60, 60),
+                Size = new Size(60, 28),
+                Location = new Point(210, 62),
+                Cursor = Cursors.Hand
+            };
+            dismissBtn.FlatAppearance.BorderSize = 0;
+            dismissBtn.Click += (s, e) => popup.Close();
+            popup.Controls.Add(dismissBtn);
+
+            // Position near system tray (bottom-right of screen)
+            var workingArea = Screen.PrimaryScreen?.WorkingArea ?? Screen.GetBounds(Point.Empty);
+            popup.Location = new Point(
+                workingArea.Right - popup.Width - 10,
+                workingArea.Bottom - popup.Height - 10
+            );
+
+            // Auto-close after 15 seconds
+            var autoCloseTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+            autoCloseTimer.Tick += (s, e) =>
+            {
+                autoCloseTimer.Stop();
+                if (!popup.IsDisposed)
+                    popup.Close();
+            };
+            autoCloseTimer.Start();
+
+            popup.FormClosed += (s, e) => autoCloseTimer.Dispose();
+            popup.Show();
+        }
+
+        private void ClearUpdateBadge()
+        {
+            hasUpdateAvailable = false;
+            availableVersion = null;
+            UpdateTrayIcon();
         }
 
         private void OnExit(object? sender, EventArgs e)
