@@ -27,6 +27,7 @@ namespace Battify
         private Button? refreshButton;
         private Label? statusLabel;
         private System.Windows.Forms.Timer? statusTimer;
+        private System.Windows.Forms.Timer? closeTimer;
 
         public event EventHandler? SettingsSaved;
 
@@ -765,14 +766,26 @@ namespace Battify
             SettingsSaved?.Invoke(this, EventArgs.Empty);
 
             // Close after a brief delay
-            var timer = new System.Windows.Forms.Timer();
-            timer.Interval = 1000;
-            timer.Tick += (s, args) =>
+            closeTimer?.Dispose();
+            closeTimer = new System.Windows.Forms.Timer();
+            closeTimer.Interval = 1000;
+            closeTimer.Tick += (s, args) =>
             {
-                timer.Stop();
+                closeTimer?.Stop();
+                closeTimer?.Dispose();
                 this.Close();
             };
-            timer.Start();
+            closeTimer.Start();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                statusTimer?.Dispose();
+                closeTimer?.Dispose();
+            }
+            base.Dispose(disposing);
         }
 
         private void LoggingCheckBox_CheckedChanged(object? sender, EventArgs e)

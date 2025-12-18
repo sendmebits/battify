@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Windows.Devices.Bluetooth;
@@ -12,6 +13,13 @@ using Windows.Storage.Streams;
 
 namespace Battify
 {
+    // Native methods for icon handle management
+    internal static class NativeMethods
+    {
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool DestroyIcon(IntPtr hIcon);
+    }
     public partial class MainForm : Form
     {
         private NotifyIcon? trayIcon;
@@ -22,6 +30,8 @@ namespace Battify
         private Dictionary<string, DateTime> lastNotificationTime;
         private Dictionary<string, DateTime> lastForcedUpdate; // Track last expensive GATT read
         private Settings appSettings;
+        private Icon? currentTrayIcon; // Track current icon for disposal
+        private bool isCheckingDevices; // Prevent overlapping scans
 
         // Public properties to allow SettingsForm to access current device data
         public Dictionary<string, BluetoothLEDevice> ConnectedDevices => connectedDevices;
@@ -39,9 +49,9 @@ namespace Battify
         {
             try
             {
-                // Force logging for debugging
-                // if (staticAppSettings == null || !staticAppSettings.LoggingEnabled)
-                //    return;
+                // Respect user's logging preference
+                if (staticAppSettings == null || !staticAppSettings.LoggingEnabled)
+                    return;
 
                 string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
                 File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
@@ -134,7 +144,18 @@ namespace Battify
                     fillBrush.Dispose();
             }
             
-            return Icon.FromHandle(bitmap.GetHicon());
+            // Create icon and dispose bitmap
+            IntPtr hIcon = bitmap.GetHicon();
+            Icon icon = Icon.FromHandle(hIcon);
+            bitmap.Dispose();
+            
+            // Clone the icon so we can safely destroy the handle
+            Icon clonedIcon = (Icon)icon.Clone();
+            
+            // Clean up the native handle (CRITICAL for preventing GDI handle leaks)
+            NativeMethods.DestroyIcon(hIcon);
+            
+            return clonedIcon;
         }
 
         private void StartBatteryMonitoring()
@@ -150,6 +171,13 @@ namespace Battify
 
         private async void BatteryCheckTimer_Tick(object? sender, EventArgs e)
         {
+            // Prevent overlapping scans
+            if (isCheckingDevices)
+            {
+                Log("[PERF] Skipping scan - previous scan still in progress");
+                return;
+            }
+            
             await CheckBluetoothDevices();
         }
 
@@ -160,6 +188,10 @@ namespace Battify
 
         private async Task CheckBluetoothDevices()
         {
+            if (isCheckingDevices)
+                return;
+            
+            isCheckingDevices = true;
             try
             {
                 // Define the property key for battery percentage
@@ -336,6 +368,10 @@ namespace Battify
                     trayIcon.Text = "Battify - Error accessing Bluetooth";
                 }
             }
+            finally
+            {
+                isCheckingDevices = false;
+            }
         }
 
         private async Task<int> GetDeviceBatteryLevel(BluetoothLEDevice device)
@@ -456,10 +492,11 @@ namespace Battify
                 }
             }
 
+            Icon newIcon;
             if (monitoredBatteryLevels.Count == 0)
             {
                 trayIcon.Text = "Battify - No connected devices";
-                trayIcon.Icon = CreateBatteryIcon(100);
+                newIcon = CreateBatteryIcon(100);
             }
             else
             {
@@ -473,8 +510,17 @@ namespace Battify
                 }
                 
                 trayIcon.Text = deviceInfo;
-                trayIcon.Icon = CreateBatteryIcon(lowestBattery);
+                newIcon = CreateBatteryIcon(lowestBattery);
             }
+            
+            // Dispose old icon before replacing (prevent handle leak)
+            if (currentTrayIcon != null)
+            {
+                currentTrayIcon.Dispose();
+            }
+            
+            trayIcon.Icon = newIcon;
+            currentTrayIcon = newIcon;
         }
 
         private string GetDeviceIdByName(string deviceName)
@@ -569,8 +615,11 @@ namespace Battify
             return "\uE702"; // Generic Bluetooth
         }
 
-        private void ShowConnectedDevices(object? sender, EventArgs e)
+        private async void ShowConnectedDevices(object? sender, EventArgs e)
         {
+            // Refresh devices - uses cache for known devices, GATT read for new ones
+            await CheckBluetoothDevices();
+
             // Create a custom form for the connected devices dialog
             Form dialog = new Form
             {
@@ -1013,6 +1062,7 @@ namespace Battify
 
         private void OnExit(object? sender, EventArgs e)
         {
+            currentTrayIcon?.Dispose();
             trayIcon?.Dispose();
             batteryCheckTimer?.Dispose();
             
@@ -1029,6 +1079,7 @@ namespace Battify
         {
             if (disposing)
             {
+                currentTrayIcon?.Dispose();
                 trayIcon?.Dispose();
                 batteryCheckTimer?.Dispose();
                 trayMenu?.Dispose();
