@@ -33,6 +33,11 @@ namespace Battify
         private Icon? currentTrayIcon; // Track current icon for disposal
         private bool isCheckingDevices; // Prevent overlapping scans
 
+        // DeviceWatcher for event-driven device discovery (Tier 1)
+        private DeviceWatcher? deviceWatcher;
+        private DateTime lastWatcherTriggered = DateTime.MinValue;
+        private const int WATCHER_THROTTLE_SECONDS = 5; // Prevent event storms
+
         // Public properties to allow SettingsForm to access current device data
         public Dictionary<string, BluetoothLEDevice> ConnectedDevices => connectedDevices;
         public Dictionary<string, int> LastKnownBatteryLevels => lastKnownBatteryLevels;
@@ -160,6 +165,10 @@ namespace Battify
 
         private void StartBatteryMonitoring()
         {
+            // Tier 1: Start DeviceWatcher for immediate device state changes
+            StartDeviceWatcher();
+            
+            // Tier 2: Start periodic timer as safety net + cache refresh
             batteryCheckTimer = new System.Windows.Forms.Timer();
             batteryCheckTimer.Interval = appSettings.DeviceScanIntervalMinutes * 60 * 1000; // Convert minutes to milliseconds
             batteryCheckTimer.Tick += BatteryCheckTimer_Tick;
@@ -168,6 +177,137 @@ namespace Battify
             // Initial check
             RefreshDevices(null, EventArgs.Empty);
         }
+
+        #region DeviceWatcher (Tier 1 - Event-Driven)
+
+        private void StartDeviceWatcher()
+        {
+            try
+            {
+                // Stop existing watcher if running
+                StopDeviceWatcher();
+
+                // Create device watcher for Bluetooth LE devices
+                string bluetoothSelector = BluetoothLEDevice.GetDeviceSelector();
+                string[] requestedProperties = new[] 
+                { 
+                    "System.Devices.Aep.DeviceAddress", 
+                    "System.Devices.Aep.IsConnected",
+                    "System.Devices.Aep.IsPresent"
+                };
+
+                deviceWatcher = DeviceInformation.CreateWatcher(
+                    bluetoothSelector,
+                    requestedProperties,
+                    DeviceInformationKind.AssociationEndpoint
+                );
+
+                // Subscribe to events
+                deviceWatcher.Added += DeviceWatcher_Added;
+                deviceWatcher.Updated += DeviceWatcher_Updated;
+                deviceWatcher.Removed += DeviceWatcher_Removed;
+                deviceWatcher.EnumerationCompleted += DeviceWatcher_EnumerationCompleted;
+                deviceWatcher.Stopped += DeviceWatcher_Stopped;
+
+                // Start watching
+                deviceWatcher.Start();
+                Log("[WATCHER] DeviceWatcher started");
+            }
+            catch (Exception ex)
+            {
+                Log($"[WATCHER] Failed to start DeviceWatcher: {ex.Message}");
+                // Fall back to timer-only mode - still functional
+            }
+        }
+
+        private void StopDeviceWatcher()
+        {
+            if (deviceWatcher != null)
+            {
+                try
+                {
+                    if (deviceWatcher.Status == DeviceWatcherStatus.Started ||
+                        deviceWatcher.Status == DeviceWatcherStatus.EnumerationCompleted)
+                    {
+                        deviceWatcher.Stop();
+                    }
+
+                    deviceWatcher.Added -= DeviceWatcher_Added;
+                    deviceWatcher.Updated -= DeviceWatcher_Updated;
+                    deviceWatcher.Removed -= DeviceWatcher_Removed;
+                    deviceWatcher.EnumerationCompleted -= DeviceWatcher_EnumerationCompleted;
+                    deviceWatcher.Stopped -= DeviceWatcher_Stopped;
+                }
+                catch (Exception ex)
+                {
+                    Log($"[WATCHER] Error stopping DeviceWatcher: {ex.Message}");
+                }
+                
+                deviceWatcher = null;
+                Log("[WATCHER] DeviceWatcher stopped");
+            }
+        }
+
+        private void DeviceWatcher_Added(DeviceWatcher sender, DeviceInformation deviceInfo)
+        {
+            Log($"[WATCHER] Device added: {deviceInfo.Name} (ID: {deviceInfo.Id})");
+            OnDeviceWatcherEvent("Added", deviceInfo.Id);
+        }
+
+        private void DeviceWatcher_Updated(DeviceWatcher sender, DeviceInformationUpdate deviceInfoUpdate)
+        {
+            Log($"[WATCHER] Device updated: {deviceInfoUpdate.Id}");
+            OnDeviceWatcherEvent("Updated", deviceInfoUpdate.Id);
+        }
+
+        private void DeviceWatcher_Removed(DeviceWatcher sender, DeviceInformationUpdate deviceInfoUpdate)
+        {
+            Log($"[WATCHER] Device removed: {deviceInfoUpdate.Id}");
+            OnDeviceWatcherEvent("Removed", deviceInfoUpdate.Id);
+        }
+
+        private void DeviceWatcher_EnumerationCompleted(DeviceWatcher sender, object args)
+        {
+            Log("[WATCHER] Initial enumeration completed");
+        }
+
+        private void DeviceWatcher_Stopped(DeviceWatcher sender, object args)
+        {
+            Log($"[WATCHER] DeviceWatcher stopped. Status: {sender.Status}");
+            
+            // Restart watcher if it stopped unexpectedly (not during disposal)
+            if (sender.Status == DeviceWatcherStatus.Aborted)
+            {
+                Log("[WATCHER] Restarting DeviceWatcher after abort...");
+                // Use BeginInvoke to avoid blocking the event handler
+                this.BeginInvoke(new Action(() => StartDeviceWatcher()));
+            }
+        }
+
+        private void OnDeviceWatcherEvent(string eventType, string deviceId)
+        {
+            // Throttle: ignore events within WATCHER_THROTTLE_SECONDS of last trigger
+            if ((DateTime.Now - lastWatcherTriggered).TotalSeconds < WATCHER_THROTTLE_SECONDS)
+            {
+                Log($"[WATCHER] Throttled {eventType} event - ignoring rapid event");
+                return;
+            }
+
+            lastWatcherTriggered = DateTime.Now;
+
+            // Trigger battery check on UI thread
+            // DeviceWatcher events come from a background thread
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(async () => await CheckBluetoothDevices()));
+            }
+            else
+            {
+                _ = CheckBluetoothDevices();
+            }
+        }
+
+        #endregion
 
         private async void BatteryCheckTimer_Tick(object? sender, EventArgs e)
         {
@@ -178,6 +318,7 @@ namespace Battify
                 return;
             }
             
+            Log("[TIMER] Periodic scan triggered (Tier 2 safety net)");
             await CheckBluetoothDevices();
         }
 
@@ -1088,6 +1229,9 @@ namespace Battify
 
         private void OnExit(object? sender, EventArgs e)
         {
+            // Stop DeviceWatcher first
+            StopDeviceWatcher();
+            
             currentTrayIcon?.Dispose();
             trayIcon?.Dispose();
             batteryCheckTimer?.Dispose();
@@ -1105,6 +1249,9 @@ namespace Battify
         {
             if (disposing)
             {
+                // Stop DeviceWatcher
+                StopDeviceWatcher();
+                
                 currentTrayIcon?.Dispose();
                 trayIcon?.Dispose();
                 batteryCheckTimer?.Dispose();

@@ -46,10 +46,11 @@ namespace Battify
         public int NotificationIntervalMinutes { get; set; } = 60;
 
         /// <summary>
-        /// How often to scan for connected devices and read cached values (Fast loop).
-        /// Default: 1 minute.
+        /// How often to scan for connected devices and read cached values (Tier 2 safety net).
+        /// DeviceWatcher handles most updates in real-time. This is a fallback.
+        /// Default: 10 minutes.
         /// </summary>
-        public int DeviceScanIntervalMinutes { get; set; } = 1;
+        public int DeviceScanIntervalMinutes { get; set; } = 10;
 
         private int _batteryUpdateIntervalMinutes = 90;
 

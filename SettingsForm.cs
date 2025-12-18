@@ -322,7 +322,7 @@ namespace Battify
                 Size = new Size(70, 25),
                 Minimum = 1,
                 Maximum = 60,
-                Value = 1,
+                Value = 10,
                 BorderStyle = BorderStyle.FixedSingle
             };
             notifyCard.Controls.Add(deviceScanIntervalNumeric);
@@ -337,8 +337,10 @@ namespace Battify
                 Size = new Size(25, 25)
             };
             scanHelp.Click += (s, e) => MessageBox.Show(
-                "This controls how often Battify checks for connected devices and reads their CACHED battery levels.\n\n" +
-                "This is a 'cheap' operation and can be done frequently (e.g., every 1 minute) without draining device battery.",
+                "This is a safety net interval. Battify uses real-time device detection (DeviceWatcher) " +
+                "to instantly respond when devices connect or disconnect.\n\n" +
+                "This timer is a fallback that runs periodically to catch any missed events and refresh " +
+                "cached battery levels. The default of 10 minutes is recommended.",
                 "Device Scan Interval", MessageBoxButtons.OK, MessageBoxIcon.Information);
             notifyCard.Controls.Add(scanHelp);
 
