@@ -161,7 +161,7 @@ namespace Battify
         private void StartBatteryMonitoring()
         {
             batteryCheckTimer = new System.Windows.Forms.Timer();
-            batteryCheckTimer.Interval = appSettings.DeviceScanIntervalSeconds * 1000; // Convert seconds to milliseconds
+            batteryCheckTimer.Interval = appSettings.DeviceScanIntervalMinutes * 60 * 1000; // Convert minutes to milliseconds
             batteryCheckTimer.Tick += BatteryCheckTimer_Tick;
             batteryCheckTimer.Start();
             
@@ -346,6 +346,15 @@ namespace Battify
                     }
                 }
 
+                // Dispose old devices that are no longer connected (prevent memory leak)
+                foreach (var oldDevice in connectedDevices.Values)
+                {
+                    if (!currentDevices.ContainsKey(oldDevice.DeviceId))
+                    {
+                        oldDevice?.Dispose();
+                    }
+                }
+                
                 connectedDevices = currentDevices;
                 
                 if (settingsChanged)
@@ -613,6 +622,9 @@ namespace Battify
             return "\uE702"; // Generic Bluetooth
         }
 
+        // Cached font for device icons to avoid repeated allocations
+        private static readonly Font DeviceIconFont = new Font("Segoe MDL2 Assets", 24);
+
         private async void ShowConnectedDevices(object? sender, EventArgs e)
         {
             // Refresh devices - uses cache for known devices, GATT read for new ones
@@ -723,7 +735,7 @@ namespace Battify
                     var iconLabel = new Label
                     {
                         Text = GetDeviceIcon(category),
-                        Font = new Font("Segoe MDL2 Assets", 24),
+                        Font = DeviceIconFont,
                         ForeColor = device.IsConnected ? ModernTheme.TextColor : ModernTheme.SecondaryTextColor,
                         Location = new Point(15, 25),
                         AutoSize = true
@@ -860,7 +872,7 @@ namespace Battify
             // Update timer interval
             if (batteryCheckTimer != null)
             {
-                batteryCheckTimer.Interval = appSettings.DeviceScanIntervalSeconds * 1000;
+                batteryCheckTimer.Interval = appSettings.DeviceScanIntervalMinutes * 60 * 1000;
             }
             
             // Clear notification history to respect new threshold

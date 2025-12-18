@@ -18,7 +18,7 @@ namespace Battify
         private NumericUpDown? thresholdNumeric;
         private NumericUpDown? intervalNumeric;
         private NumericUpDown? checkIntervalNumeric; // Maps to BatteryUpdateIntervalMinutes (Slow loop)
-        private NumericUpDown? deviceScanIntervalNumeric; // Maps to DeviceScanIntervalSeconds (Fast loop)
+        private NumericUpDown? deviceScanIntervalNumeric; // Maps to DeviceScanIntervalMinutes (Fast loop)
         private CheckBox? loggingCheckBox;
         private CheckBox? startWithWindowsCheckBox;
         private Button? viewLogButton;
@@ -320,14 +320,14 @@ namespace Battify
             {
                 Location = new Point(210, 128),
                 Size = new Size(70, 25),
-                Minimum = 10,
-                Maximum = 300,
-                Value = 60,
+                Minimum = 1,
+                Maximum = 60,
+                Value = 1,
                 BorderStyle = BorderStyle.FixedSingle
             };
             notifyCard.Controls.Add(deviceScanIntervalNumeric);
 
-            var scanUnit = new Label { Text = "seconds", Location = new Point(285, 130), AutoSize = true };
+            var scanUnit = new Label { Text = "minutes", Location = new Point(285, 130), AutoSize = true };
             notifyCard.Controls.Add(scanUnit);
 
             var scanHelp = new ModernTheme.ModernButton
@@ -338,7 +338,7 @@ namespace Battify
             };
             scanHelp.Click += (s, e) => MessageBox.Show(
                 "This controls how often Battify checks for connected devices and reads their CACHED battery levels.\n\n" +
-                "This is a 'cheap' operation and can be done frequently (e.g., every 60 seconds) without draining device battery.",
+                "This is a 'cheap' operation and can be done frequently (e.g., every 1 minute) without draining device battery.",
                 "Device Scan Interval", MessageBoxButtons.OK, MessageBoxIcon.Information);
             notifyCard.Controls.Add(scanHelp);
 
@@ -374,7 +374,7 @@ namespace Battify
             };
             checkHelp.Click += (s, e) => MessageBox.Show(
                 "This controls how often Battify forces a fresh battery reading from the device.\n\n" +
-                "WARNING: This wakes up the device radio and consumes battery power. Keep this interval long (e.g., 30+ minutes) to preserve battery life.",
+                "WARNING: This wakes up the device radio and consumes battery power. Keep this interval long (e.g., 120+ minutes) to preserve battery life.",
                 "Force Update Interval", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             notifyCard.Controls.Add(checkHelp);
 
@@ -474,7 +474,7 @@ namespace Battify
             if (checkIntervalNumeric != null)
                 checkIntervalNumeric.Value = settings.BatteryUpdateIntervalMinutes;
             if (deviceScanIntervalNumeric != null)
-                deviceScanIntervalNumeric.Value = settings.DeviceScanIntervalSeconds;
+                deviceScanIntervalNumeric.Value = settings.DeviceScanIntervalMinutes;
 
             // Load logging settings
             if (loggingCheckBox != null)
@@ -695,7 +695,7 @@ namespace Battify
             if (checkIntervalNumeric != null)
                 settings.BatteryUpdateIntervalMinutes = (int)checkIntervalNumeric.Value;
             if (deviceScanIntervalNumeric != null)
-                settings.DeviceScanIntervalSeconds = (int)deviceScanIntervalNumeric.Value;
+                settings.DeviceScanIntervalMinutes = (int)deviceScanIntervalNumeric.Value;
 
             // Save logging settings
             if (loggingCheckBox != null)

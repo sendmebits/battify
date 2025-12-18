@@ -47,9 +47,9 @@ namespace Battify
 
         /// <summary>
         /// How often to scan for connected devices and read cached values (Fast loop).
-        /// Default: 60 seconds.
+        /// Default: 1 minute.
         /// </summary>
-        public int DeviceScanIntervalSeconds { get; set; } = 60;
+        public int DeviceScanIntervalMinutes { get; set; } = 1;
 
         private int _batteryUpdateIntervalMinutes = 90;
 

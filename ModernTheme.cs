@@ -32,7 +32,10 @@ namespace Battify
             form.FormBorderStyle = FormBorderStyle.FixedSingle;
             
             // Try to use Segoe UI Variable if available, fallback to Segoe UI
-            try { var test = new Font("Segoe UI Variable Text", 9); }
+            try 
+            { 
+                using (var test = new Font("Segoe UI Variable Text", 9)) { } // Dispose immediately
+            }
             catch { 
                 HeaderFont = new Font("Segoe UI", 14, FontStyle.Bold);
                 SubHeaderFont = new Font("Segoe UI", 10, FontStyle.Bold);
@@ -41,6 +44,7 @@ namespace Battify
             }
         }
 
+        // Returns a GraphicsPath that the CALLER MUST DISPOSE
         public static GraphicsPath GetRoundedRect(Rectangle bounds, int radius)
         {
             int diameter = radius * 2;
@@ -108,24 +112,25 @@ namespace Battify
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
                 var rect = new Rectangle(0, 0, this.Width - 1, this.Height - 1);
-                var path = GetRoundedRect(rect, BorderRadius);
+                using (var path = GetRoundedRect(rect, BorderRadius))
+                {
+                    // Background
+                    Color bgColor = SurfaceColor;
+                    if (this.ClientRectangle.Contains(this.PointToClient(Cursor.Position)))
+                    {
+                        bgColor = (Control.MouseButtons == MouseButtons.Left) ? PressedColor : HoverColor;
+                    }
+                    
+                    using (var brush = new SolidBrush(bgColor))
+                    {
+                        e.Graphics.FillPath(brush, path);
+                    }
 
-                // Background
-                Color bgColor = SurfaceColor;
-                if (this.ClientRectangle.Contains(this.PointToClient(Cursor.Position)))
-                {
-                    bgColor = (Control.MouseButtons == MouseButtons.Left) ? PressedColor : HoverColor;
-                }
-                
-                using (var brush = new SolidBrush(bgColor))
-                {
-                    e.Graphics.FillPath(brush, path);
-                }
-
-                // Border
-                using (var pen = new Pen(BorderColor))
-                {
-                    e.Graphics.DrawPath(pen, path);
+                    // Border
+                    using (var pen = new Pen(BorderColor))
+                    {
+                        e.Graphics.DrawPath(pen, path);
+                    }
                 }
 
                 // Text
@@ -168,18 +173,19 @@ namespace Battify
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
                 var rect = new Rectangle(0, 0, this.Width - 1, this.Height - 1);
-                var path = GetRoundedRect(rect, BorderRadius);
-
-                // Background
-                Color bgColor = AccentColor;
-                if (this.ClientRectangle.Contains(this.PointToClient(Cursor.Position)))
+                using (var path = GetRoundedRect(rect, BorderRadius))
                 {
-                    bgColor = (Control.MouseButtons == MouseButtons.Left) ? ControlPaint.Dark(AccentColor) : ControlPaint.Light(AccentColor);
-                }
+                    // Background
+                    Color bgColor = AccentColor;
+                    if (this.ClientRectangle.Contains(this.PointToClient(Cursor.Position)))
+                    {
+                        bgColor = (Control.MouseButtons == MouseButtons.Left) ? ControlPaint.Dark(AccentColor) : ControlPaint.Light(AccentColor);
+                    }
 
-                using (var brush = new SolidBrush(bgColor))
-                {
-                    e.Graphics.FillPath(brush, path);
+                    using (var brush = new SolidBrush(bgColor))
+                    {
+                        e.Graphics.FillPath(brush, path);
+                    }
                 }
 
                 // Text
@@ -204,18 +210,19 @@ namespace Battify
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
                 var rect = new Rectangle(0, 0, this.Width - 1, this.Height - 1);
-                var path = GetRoundedRect(rect, BorderRadius);
-
-                // Background - Fill with SurfaceColor explicitly
-                using (var brush = new SolidBrush(SurfaceColor))
+                using (var path = GetRoundedRect(rect, BorderRadius))
                 {
-                    e.Graphics.FillPath(brush, path);
-                }
+                    // Background - Fill with SurfaceColor explicitly
+                    using (var brush = new SolidBrush(SurfaceColor))
+                    {
+                        e.Graphics.FillPath(brush, path);
+                    }
 
-                // Border
-                using (var pen = new Pen(BorderColor))
-                {
-                    e.Graphics.DrawPath(pen, path);
+                    // Border
+                    using (var pen = new Pen(BorderColor))
+                    {
+                        e.Graphics.DrawPath(pen, path);
+                    }
                 }
             }
         }
@@ -250,38 +257,39 @@ namespace Battify
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
                 var rect = new Rectangle(0, 0, this.Width - 1, this.Height - 1);
-                var path = ModernTheme.GetRoundedRect(rect, this.Height / 2);
-
-                if (_isOn)
+                using (var path = ModernTheme.GetRoundedRect(rect, this.Height / 2))
                 {
-                    using (var brush = new SolidBrush(AccentColor))
+                    if (_isOn)
                     {
-                        e.Graphics.FillPath(brush, path);
+                        using (var brush = new SolidBrush(AccentColor))
+                        {
+                            e.Graphics.FillPath(brush, path);
+                        }
+                        
+                        // Draw knob on right
+                        int knobSize = this.Height - 4;
+                        using (var brush = new SolidBrush(Color.White))
+                        {
+                            e.Graphics.FillEllipse(brush, this.Width - knobSize - 2, 2, knobSize, knobSize);
+                        }
                     }
-                    
-                    // Draw knob on right
-                    int knobSize = this.Height - 4;
-                    using (var brush = new SolidBrush(Color.White))
+                    else
                     {
-                        e.Graphics.FillEllipse(brush, this.Width - knobSize - 2, 2, knobSize, knobSize);
-                    }
-                }
-                else
-                {
-                    using (var brush = new SolidBrush(Color.FromArgb(200, 200, 200))) // Gray for off
-                    {
-                        e.Graphics.FillPath(brush, path);
-                    }
-                    using (var pen = new Pen(Color.FromArgb(180, 180, 180)))
-                    {
-                        e.Graphics.DrawPath(pen, path);
-                    }
+                        using (var brush = new SolidBrush(Color.FromArgb(200, 200, 200))) // Gray for off
+                        {
+                            e.Graphics.FillPath(brush, path);
+                        }
+                        using (var pen = new Pen(Color.FromArgb(180, 180, 180)))
+                        {
+                            e.Graphics.DrawPath(pen, path);
+                        }
 
-                    // Draw knob on left
-                    int knobSize = this.Height - 4;
-                    using (var brush = new SolidBrush(Color.White))
-                    {
-                        e.Graphics.FillEllipse(brush, 2, 2, knobSize, knobSize);
+                        // Draw knob on left
+                        int knobSize = this.Height - 4;
+                        using (var brush = new SolidBrush(Color.White))
+                        {
+                            e.Graphics.FillEllipse(brush, 2, 2, knobSize, knobSize);
+                        }
                     }
                 }
             }
