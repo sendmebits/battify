@@ -257,8 +257,6 @@ namespace Battify
                             }
 
                             if (device.ConnectionStatus == BluetoothConnectionStatus.Connected)
-
-                            if (device.ConnectionStatus == BluetoothConnectionStatus.Connected)
                             {
                                 currentDevices[device.DeviceId] = device;
                                 string deviceId = device.DeviceId;
@@ -862,7 +860,7 @@ namespace Battify
             // Update timer interval
             if (batteryCheckTimer != null)
             {
-                batteryCheckTimer.Interval = appSettings.CheckIntervalMinutes * 60 * 1000;
+                batteryCheckTimer.Interval = appSettings.DeviceScanIntervalSeconds * 1000;
             }
             
             // Clear notification history to respect new threshold

@@ -71,8 +71,9 @@ namespace Battify
                 statusLabel.ForeColor = color;
                 statusLabel.Visible = true;
                 
-                // Reset timer
+                // Reset timer - dispose old one first
                 statusTimer?.Stop();
+                statusTimer?.Dispose();
                 statusTimer = new System.Windows.Forms.Timer();
                 statusTimer.Interval = 3000; // 3 seconds
                 statusTimer.Tick += (s, e) =>
