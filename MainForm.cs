@@ -907,7 +907,6 @@ namespace Battify
                                 FileName = latestVersionUrl,
                                 UseShellExecute = true
                             });
-                            ClearUpdateBadge();
                         }
                         catch { }
                     }
@@ -1597,7 +1596,6 @@ namespace Battify
             downloadBtn.Click += (s, e) =>
             {
                 popup.Close();
-                ClearUpdateBadge();
                 if (!string.IsNullOrEmpty(latestVersionUrl))
                 {
                     try
