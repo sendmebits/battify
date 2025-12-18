@@ -55,7 +55,7 @@ namespace Battify
 
         /// <summary>
         /// How often to force a fresh battery reading from the device (Slow loop).
-        /// Default: 30 minutes.
+        /// Default: 90 minutes.
         /// </summary>
         public int BatteryUpdateIntervalMinutes 
         { 
@@ -67,7 +67,7 @@ namespace Battify
             }
         }
 
-        private int _checkIntervalMinutes = 30;
+        private int _checkIntervalMinutes = 90;
 
         /// <summary>
         /// Legacy setting. Kept for backward compatibility with existing settings.json files.

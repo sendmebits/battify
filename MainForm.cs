@@ -869,10 +869,12 @@ namespace Battify
             appSettings = Settings.Load();
             staticAppSettings = appSettings;
             
-            // Update timer interval
+            // Update timer interval - MUST stop/start to apply new interval immediately
             if (batteryCheckTimer != null)
             {
+                batteryCheckTimer.Stop();
                 batteryCheckTimer.Interval = appSettings.DeviceScanIntervalMinutes * 60 * 1000;
+                batteryCheckTimer.Start();
             }
             
             // Clear notification history to respect new threshold
