@@ -311,13 +311,23 @@ namespace Battify
                             
                                 if (batteryLevel >= 0)
                                 {
-                                    // Update settings
-                                    appSettings.LastKnownBatteryLevels[deviceId] = batteryLevel;
-                                    if (!string.IsNullOrEmpty(device.Name))
+                                    // Update settings only if value actually changed (reduce disk I/O)
+                                    int previousLevel = appSettings.LastKnownBatteryLevels.ContainsKey(deviceId) 
+                                        ? appSettings.LastKnownBatteryLevels[deviceId] 
+                                        : -1;
+                                    
+                                    if (previousLevel != batteryLevel)
+                                    {
+                                        appSettings.LastKnownBatteryLevels[deviceId] = batteryLevel;
+                                        settingsChanged = true;
+                                    }
+                                    
+                                    if (!string.IsNullOrEmpty(device.Name) && 
+                                        (!appSettings.DeviceNames.ContainsKey(deviceId) || appSettings.DeviceNames[deviceId] != device.Name))
                                     {
                                         appSettings.DeviceNames[deviceId] = device.Name;
+                                        settingsChanged = true;
                                     }
-                                    settingsChanged = true;
                                     
                                     // Update local dictionary
                                     lastKnownBatteryLevels[deviceId] = batteryLevel;
@@ -383,6 +393,7 @@ namespace Battify
 
         private async Task<int> GetDeviceBatteryLevel(BluetoothLEDevice device)
         {
+            GattDeviceService? batteryService = null;
             try
             {
                 Log($"[DEBUG] Attempting to read battery level for {device.Name}");
@@ -399,7 +410,6 @@ namespace Battify
                 Log($"[DEBUG]   - Found {servicesResult.Services.Count} GATT service(s)");
                 
                 // Look for the Battery Service
-                GattDeviceService? batteryService = null;
                 foreach (var service in servicesResult.Services)
                 {
                     Log($"[DEBUG]     - Service UUID: {service.Uuid}");
@@ -423,7 +433,6 @@ namespace Battify
                 if (characteristicsResult.Status != GattCommunicationStatus.Success)
                 {
                     Log($"[DEBUG]   - Failed to get characteristics: {characteristicsResult.Status}");
-                    batteryService.Dispose();
                     return -1;
                 }
                 
@@ -444,7 +453,6 @@ namespace Battify
                 if (batteryLevelChar == null)
                 {
                     Log($"[DEBUG]   - No Battery Level Characteristic found");
-                    batteryService.Dispose();
                     return -1;
                 }
                 
@@ -454,7 +462,6 @@ namespace Battify
                 if (readResult.Status != GattCommunicationStatus.Success)
                 {
                     Log($"[DEBUG]   - Failed to read battery level: {readResult.Status}");
-                    batteryService.Dispose();
                     return -1;
                 }
                 
@@ -464,13 +471,17 @@ namespace Battify
                 
                 Log($"[DEBUG]   - Successfully read battery level: {batteryLevel}%");
                 
-                batteryService.Dispose();
                 return batteryLevel;
             }
             catch (Exception ex)
             {
                 Log($"[ERROR] Error getting battery level for {device.Name}: {ex.Message}");
                 Log($"[ERROR] Stack trace: {ex.StackTrace}");
+            }
+            finally
+            {
+                // Always dispose the GATT service to prevent resource leaks
+                batteryService?.Dispose();
             }
             
             return -1; // Battery level unknown
@@ -879,6 +890,9 @@ namespace Battify
             
             // Clear notification history to respect new threshold
             lastNotificationTime.Clear();
+            
+            // Clear forced update history to respect new BatteryUpdateIntervalMinutes
+            lastForcedUpdate.Clear();
             
             // Refresh devices immediately
             RefreshDevices(null, EventArgs.Empty);

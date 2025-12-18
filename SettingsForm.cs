@@ -746,15 +746,11 @@ namespace Battify
                 }
             }
 
-            // Clean up device names for devices that are no longer monitored
-            var deviceIdsToRemove = settings.DeviceNames.Keys
-                .Where(deviceId => !newMonitoredDeviceIds.Contains(deviceId))
-                .ToList();
-            
-            foreach (var deviceId in deviceIdsToRemove)
-            {
-                settings.DeviceNames.Remove(deviceId);
-            }
+            // NOTE: We intentionally do NOT clean up DeviceNames, LastKnownBatteryLevels, 
+            // or DeviceCategories here. This data is useful for:
+            // 1. Showing disconnected devices with their last known state
+            // 2. Allowing users to re-enable monitoring without losing device info
+            // 3. Displaying device names in the UI even when disconnected
 
             settings.Save();
 
