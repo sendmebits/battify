@@ -10,9 +10,11 @@
 # Battify
 Battify-Standalone/
 Build/
+installer-output/
 
 # Tools
 .kiro
+.cursor
 
 # Build results
 [Dd]ebug/

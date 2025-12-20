@@ -1,0 +1,122 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0, v1.0.1, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    
+    - name: Extract version from tag
+      id: version
+      run: |
+        $tag = "${{ github.ref_name }}"
+        $version = $tag -replace '^v', ''
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "Extracted version: $version"
+      shell: pwsh
+    
+    - name: Update version in project
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $csproj = Get-Content "Battify.csproj" -Raw
+        $csproj = $csproj -replace '<Version>.*</Version>', "<Version>$version</Version>"
+        $csproj = $csproj -replace '<AssemblyVersion>.*</AssemblyVersion>', "<AssemblyVersion>$version.0</AssemblyVersion>"
+        $csproj = $csproj -replace '<FileVersion>.*</FileVersion>', "<FileVersion>$version.0</FileVersion>"
+        Set-Content "Battify.csproj" $csproj
+      shell: pwsh
+    
+    - name: Build standalone executable
+      run: |
+        dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true -o Battify-Standalone
+      
+    - name: Install Inno Setup
+      run: |
+        choco install innosetup -y
+      shell: pwsh
+    
+    - name: Update version in Inno Setup script
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $setupPath = "installer/setup.iss"
+        $content = Get-Content $setupPath -Raw
+        $content = $content -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$version`""
+        Set-Content $setupPath $content
+      shell: pwsh
+    
+    - name: Build installer
+      run: |
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\setup.iss"
+      shell: pwsh
+    
+    - name: Create ZIP of standalone
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        Compress-Archive -Path "Battify-Standalone\*" -DestinationPath "Battify-Portable-$version.zip"
+      shell: pwsh
+    
+    - name: Generate Release Notes
+      id: release_notes
+      run: |
+        $notes = @"
+        ## Battify ${{ steps.version.outputs.VERSION }}
+        
+        ### Downloads
+        - **Battify-Setup-${{ steps.version.outputs.VERSION }}.exe** - Installer (recommended)
+        - **Battify-Portable-${{ steps.version.outputs.VERSION }}.zip** - Portable version (no installation required)
+        
+        ### Installation
+        1. Download the installer or portable ZIP
+        2. Run the installer or extract the ZIP to any folder
+        3. Launch Battify - it will appear in your system tray
+        
+        ### Requirements
+        - Windows 10 or Windows 11
+        - Bluetooth LE devices with GATT Battery Service support
+        "@
+        
+        # Escape for GitHub Actions
+        $notes = $notes -replace "`r`n", "%0A" -replace "`n", "%0A"
+        echo "NOTES=$notes" >> $env:GITHUB_OUTPUT
+      shell: pwsh
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Battify ${{ steps.version.outputs.VERSION }}
+        body: |
+          ## Battify ${{ steps.version.outputs.VERSION }}
+          
+          ### Downloads
+          - **Battify-Setup-${{ steps.version.outputs.VERSION }}.exe** - Installer (recommended)
+          - **Battify-Portable-${{ steps.version.outputs.VERSION }}.zip** - Portable version (no installation required)
+          
+          ### Installation
+          1. Download the installer or portable ZIP
+          2. Run the installer or extract the ZIP to any folder
+          3. Launch Battify - it will appear in your system tray
+          
+          ### Requirements
+          - Windows 10 or Windows 11
+          - Bluetooth LE devices with GATT Battery Service support
+        files: |
+          installer-output/Battify-Setup-${{ steps.version.outputs.VERSION }}.exe
+          Battify-Portable-${{ steps.version.outputs.VERSION }}.zip
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

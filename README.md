@@ -6,7 +6,10 @@ I was frustrated with bloated bluetooth vendor software when all I wanted was a 
 
 ## Download
 
-Standalone app zip file include with each version in the <a href=https://github.com/sendmebits/battify/releases>releases</a> page. Download and unzip to the folder of your choice and it will run from there. 
+Download from the <a href="https://github.com/sendmebits/battify/releases">releases</a> page:
+
+- **Battify-Setup-x.x.x.exe** - Installer (recommended) - Includes Start Menu shortcut and optional Windows startup
+- **Battify-Portable-x.x.x.zip** - Portable version (no installation required) 
 
 ## Features
 
